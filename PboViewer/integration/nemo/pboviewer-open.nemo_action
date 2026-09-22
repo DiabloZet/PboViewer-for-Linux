@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Открыть архив в PboViewer
+Comment=Открыть PBO в PboViewer
+Exec=@BIN@ %F
+Icon-Name=org.pboviewer.PboViewer
+Selection=notnone
+Extensions=pbo;

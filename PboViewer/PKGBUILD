@@ -1,0 +1,48 @@
+# Локальная сборка: в этой папке выполнить  makepkg -si
+pkgname=pboviewer-gtk
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="Просмотр и редактирование архивов PBO (DayZ/Arma) без распаковки: GTK4, Wayland, drag-and-drop"
+arch=('any')
+url="https://github.com/SteezCram/PboViewer"
+license=('GPL-3.0-only')
+depends=('python' 'python-gobject' 'gtk4' 'libadwaita')
+optdepends=('python-nautilus: пункты «Открыть в PboViewer» в меню Nautilus'
+            'dolphin: пункты «Открыть в PboViewer» в меню Dolphin'
+            'nemo: пункты «Открыть в PboViewer» в меню Nemo')
+provides=('pboviewer')
+conflicts=('pboviewer')
+
+package() {
+    local src="$startdir"
+    local bin=/usr/bin/pboviewer
+    local app=org.pboviewer.PboViewer
+
+    install -d "$pkgdir/usr/lib/pboviewer/pboviewer"
+    install -m644 "$src"/pboviewer/*.py "$pkgdir/usr/lib/pboviewer/pboviewer/"
+    python -m compileall -q -d /usr/lib/pboviewer/pboviewer "$pkgdir/usr/lib/pboviewer/pboviewer"
+
+    install -Dm755 /dev/stdin "$pkgdir$bin" <<'EOF'
+#!/bin/sh
+PYTHONPATH="/usr/lib/pboviewer${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m pboviewer "$@"
+EOF
+
+    _subst() { install -Dm644 /dev/stdin "$2" < <(sed "s|@BIN@|$bin|g" "$1"); }
+
+    _subst "$src/data/$app.desktop" "$pkgdir/usr/share/applications/$app.desktop"
+    install -Dm644 "$src/data/pboviewer-mime.xml" "$pkgdir/usr/share/mime/packages/pboviewer.xml"
+    cp -r "$src/data/icons" "$pkgdir/usr/share/"
+    find "$pkgdir/usr/share/icons" -type f -exec chmod 644 {} +
+
+    for f in "$src"/integration/dolphin/*.desktop; do
+        _subst "$f" "$pkgdir/usr/share/kio/servicemenus/$(basename "$f")"
+    done
+    _subst "$src/integration/nautilus/pboviewer_nautilus.py" \
+           "$pkgdir/usr/share/nautilus-python/extensions/pboviewer_nautilus.py"
+    for f in "$src"/integration/nemo/*.nemo_action; do
+        _subst "$f" "$pkgdir/usr/share/nemo/actions/$(basename "$f")"
+    done
+
+    install -Dm644 "$src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$src/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

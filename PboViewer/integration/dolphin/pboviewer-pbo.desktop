@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Service
+MimeType=application/x-pbo;
+Actions=open;unpack;
+X-KDE-Priority=TopLevel
+
+[Desktop Action open]
+Name=Open archive in PboViewer
+Name[ru]=Открыть архив в PboViewer
+Icon=org.pboviewer.PboViewer
+Exec=@BIN@ %F
+
+[Desktop Action unpack]
+Name=Unpack PBO here
+Name[ru]=Распаковать PBO сюда
+Icon=archive-extract
+Exec=@BIN@ --unpack %F

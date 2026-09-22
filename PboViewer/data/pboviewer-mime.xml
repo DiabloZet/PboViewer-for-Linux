@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-pbo">
+    <comment>Bohemia Interactive PBO archive</comment>
+    <comment xml:lang="ru">Архив PBO (DayZ / Arma)</comment>
+    <sub-class-of type="application/octet-stream"/>
+    <generic-icon name="package-x-generic"/>
+    <icon name="application-x-pbo"/>
+    <glob pattern="*.pbo"/>
+  </mime-type>
+</mime-info>

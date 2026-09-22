@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=PboViewer
+GenericName=PBO Archive Manager
+GenericName[ru]=Менеджер архивов PBO
+Comment=View and edit DayZ/Arma PBO archives without unpacking
+Comment[ru]=Просмотр и редактирование архивов PBO (DayZ/Arma) без распаковки
+Exec=@BIN@ %F
+Icon=org.pboviewer.PboViewer
+Terminal=false
+StartupNotify=true
+StartupWMClass=org.pboviewer.PboViewer
+Categories=Utility;Archiving;Compression;Development;
+MimeType=application/x-pbo;
+Keywords=pbo;dayz;arma;archive;mod;

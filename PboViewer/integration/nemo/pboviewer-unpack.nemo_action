@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Распаковать PBO сюда
+Comment=Распаковать выбранные PBO рядом с ними
+Exec=@BIN@ --unpack %F
+Icon-Name=archive-extract
+Selection=notnone
+Extensions=pbo;

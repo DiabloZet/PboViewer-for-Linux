@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Упаковать папку в PBO
+Comment=Создать <папка>.pbo рядом с папкой
+Exec=/usr/bin/pboviewer --pack %F
+Icon-Name=org.pboviewer.PboViewer
+Selection=notnone
+Extensions=dir;

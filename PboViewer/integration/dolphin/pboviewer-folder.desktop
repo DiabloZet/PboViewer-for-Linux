@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+Actions=pack;
+
+[Desktop Action pack]
+Name=Pack folder into PBO
+Name[ru]=Упаковать папку в PBO
+Icon=org.pboviewer.PboViewer
+Exec=@BIN@ --pack %F
