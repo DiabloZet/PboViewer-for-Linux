@@ -4,8 +4,6 @@
 
 ![GTK 4](https://img.shields.io/badge/GTK-4-4a86cf) ![Wayland](https://img.shields.io/badge/Wayland-native-green) ![Arch Linux](https://img.shields.io/badge/Arch_Linux-PKGBUILD-1793d1) ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-![PboViewer](docs/screenshot.png)
-
 Написан на Python + GTK 4 / libadwaita, работает нативно под Wayland (KDE Plasma, GNOME, Hyprland, Sway).
 Дополнительно встраивается в контекстное меню Dolphin, Nautilus и Nemo.
 
