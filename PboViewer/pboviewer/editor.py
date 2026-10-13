@@ -168,7 +168,7 @@ class EditorWindow(Adw.ApplicationWindow):
         self.connect("close-request", self._on_close_request)
         if line:
             GLib.idle_add(self.goto_line, line)
-        GLib.idle_add(self.view.grab_focus)
+        GLib.idle_add(lambda: self.view.grab_focus() and False)
 
     # ------------------------------------------------------------------ UI
 
