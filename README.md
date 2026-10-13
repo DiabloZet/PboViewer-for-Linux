@@ -28,6 +28,59 @@
 - Резервная копия `.bak` при каждом изменении (по умолчанию выключена, включается в меню).
 - Читает сжатые (LZSS) записи. Добавленные файлы пишутся без сжатия.
 
+### Классы мода
+Вкладка **«Классы»** (Alt+2) появляется сразу после открытия PBO. Программа читает скрипты `.c`
+(Enforce Script) и конфиги (`config.cpp`, `config.bin` и другие бинарные конфиги) и показывает:
+- имя класса и тип: скриптовый, `modded`, класс конфига (с секцией `CfgVehicles`, `CfgWeapons`…);
+- родителя и всю цепочку наследования до базового класса (`MyCar → CarScript → Car → Transport → EntityAI…`);
+- **краткое описание, для чего используется родительский класс** (на русском, из встроенной базы);
+- в каком файле и на какой строке объявлен класс, и сам код класса.
+
+Двойной щелчок или Enter открывает файл во встроенном редакторе на строке объявления.
+
+### Поиск классов
+Поле поиска на вкладке «Классы» и отдельное окно **Меню → Поиск классов** (Ctrl+Shift+F):
+- по имени или его части, без учёта регистра (`playerb` найдёт `PlayerBase`);
+- **по описанию**, то есть по смыслу: «шкур», «машин», «одежд», «игрок» найдут подходящие классы;
+- флажок **«База DayZ»** добавляет к поиску встроенную базу: около 25 000 ванильных классов DayZ
+  (CfgVehicles, CfgWeapons, CfgMagazines, CfgAmmo, звуки, …) с родителями и описаниями, а также
+  иерархию скриптов (`PlayerBase`, `ItemBase`, `CarScript`, `MissionServer`, `ActionContinuousBase`…);
+- в окне поиска можно добавить **папку с модами**: она сканируется рекурсивно (все `.pbo`, а также
+  распакованные `.c`, `config.cpp`, `config.bin`).
+
+### Встроенный редактор
+Двойной щелчок по `.cfg`, `.cpp`, `.c`, `.xml`, `.json`, `.txt`… и по **бинарному `config.bin`**
+открывает файл в редакторе программы (F4 — открыть выделенный файл в редакторе, правый клик →
+«Открыть во внешней программе» — как раньше). `config.bin` показывается текстом и при сохранении
+снова собирается в бинарный вид (rapify); ошибка в синтаксисе показывается с номером строки.
+Ctrl+S сохраняет **сразу в архив**. Подсветка синтаксиса и номера строк — с пакетом `gtksourceview5`
+(без него редактор тоже работает).
+
+| Клавиши | Действие |
+|---|---|
+| Ctrl+S / Ctrl+Shift+S | сохранить в архив / сохранить копию на диск |
+| Ctrl+Z / Ctrl+Shift+Z, Ctrl+Y | отменить / повторить |
+| Ctrl+F, Ctrl+H (Ctrl+R) | поиск, поиск и замена (учёт регистра, регулярные выражения) |
+| F3 / Shift+F3 | следующее / предыдущее совпадение |
+| Ctrl+G | перейти к строке |
+| Ctrl+D | дублировать строку |
+| Ctrl+Shift+K (Ctrl+E) | удалить строку |
+| Ctrl+L | выделить строку |
+| Alt+↑ / Alt+↓ | переместить строку |
+| Ctrl+/ | закомментировать / раскомментировать |
+| Tab / Shift+Tab | отступ у выделенных строк |
+| Ctrl+Плюс / Минус / 0 | размер шрифта |
+| F7 | проверить синтаксис конфига |
+
+Сочетания работают и в русской раскладке. Файлы `.cfg`/`.bin` с диска тоже открываются в редакторе:
+*Меню → Открыть файл в редакторе* или `pboviewer config.bin`.
+
+### Подпись `.bisign`
+*Меню → Подписать PBO (.bisign)…* создаёт `мод.pbo.<ключ>.bisign` рядом с архивом (как DSSignFile).
+*Меню → Создать ключи подписи* создаёт пару `.biprivatekey` (закрытый, никому не передавайте) и
+`.bikey` (кладётся на сервер в папку `keys`), как DSCreateKey. Включите **«Обновлять .bisign после
+изменений»**, и подпись будет пересоздаваться автоматически после каждого сохранения архива.
+
 ### Контекстное меню файлового менеджера
 Правый клик по `.pbo`:
 - **Открыть архив в PboViewer**
@@ -55,7 +108,7 @@ systemctl --user restart plasma-plasmashell   # меню на рабочем с�
 
 ## Установка на Arch Linux
 
-Зависимости: `python`, `python-gobject`, `gtk4`, `libadwaita`.
+Зависимости: `python`, `python-gobject`, `gtk4`, `libadwaita`; по желанию `gtksourceview5` (подсветка синтаксиса в редакторе).
 
 **Вариант 1: пакетом pacman (рекомендуется)**
 ```sh
@@ -67,7 +120,7 @@ makepkg -si
 
 **Вариант 2: только для себя, без root**
 ```sh
-sudo pacman -S --needed python python-gobject gtk4 libadwaita
+sudo pacman -S --needed python python-gobject gtk4 libadwaita gtksourceview5
 git clone https://github.com/DiabloZet/pboviewer-gtk.git
 cd pboviewer-gtk
 ./install.sh        # удаление: ./uninstall.sh
@@ -91,12 +144,23 @@ pboviewer unpack mod.pbo [-o папка]
 pboviewer pack ./mod [-o mod.pbo] [--prefix "Artemida\mod"]
 pboviewer prefix mod.pbo [новый_префикс]
 pboviewer verify mod.pbo
+pboviewer classes mod.pbo                  # все классы мода: родитель, описание, файл:строка
+pboviewer classes ./mods -s playerb        # рекурсивно по папке, часть имени, без учёта регистра
+pboviewer classes -b -d "шкур"             # поиск по описанию во встроенной базе DayZ
+pboviewer classes ./mods -r PlayerBase     # показать код класса
+pboviewer keygen MyMod -o ~/keys           # MyMod.biprivatekey + MyMod.bikey
+pboviewer sign ~/keys/MyMod.biprivatekey mod.pbo [-v 3]
+pboviewer checksign MyMod.bikey mod.pbo
+pboviewer derap config.bin -o config.cpp   # бинарный конфиг → текст
+pboviewer rap config.cpp -o config.bin     # текст → бинарный конфиг
 ```
 
 ## Важно знать
 
 - **Подписи `.bisign`** после любого изменения PBO становятся недействительными. Если на сервере включён
-  `verifySignatures`, переподпишите архив.
+  `verifySignatures`, переподпишите архив (*Меню → Подписать PBO*) или включите автоматическое обновление подписи.
+  По умолчанию подпись версии 3, как у DSSignFile; проверьте подписанный мод на своём сервере, прежде чем
+  выкладывать.
 - **Префикс `pboprefix` вместо `prefix`.** Старый C#-упаковщик (`PBOWriter.WritePBO`) берёт имя свойства
   из имени файла `$PBOPREFIX$` и пишет ключ `pboprefix`. DayZ ищет ключ `prefix` и такой префикс
   не увидит. PboViewer покажет предупреждение внизу окна; кнопка «Сохранить» в *Меню → Свойства PBO*
@@ -106,15 +170,20 @@ pboviewer verify mod.pbo
   через 12 часов.
 
 ## Горячие клавиши
-Ctrl+O открыть · Ctrl+F поиск · Enter/двойной щелчок открыть · Backspace, Alt+↑ вверх ·
+Ctrl+O открыть · Ctrl+F поиск · Enter/двойной щелчок открыть · F4 встроенный редактор ·
+Alt+1 / Alt+2 вкладки «Файлы» / «Классы» · Ctrl+Shift+F поиск классов · Backspace, Alt+↑ вверх ·
 F2 переименовать · Delete удалить · Ctrl+C / Ctrl+V копировать / вставить · Shift+F10 меню · Ctrl+W закрыть
 
 ## Разработка
 ```sh
 python3 -m unittest discover -s tests -v
 ```
-Структура: `pboviewer/pbo.py` (формат PBO, потоковое редактирование), `app.py` (интерфейс), `cli.py`
-(команды), `integration/` (меню Dolphin/Nautilus/Nemo), `data/` (ярлык, MIME, иконки).
+Структура: `pboviewer/pbo.py` (формат PBO, потоковое редактирование), `config.py` (config.bin ⇄ текст),
+`classes.py` / `classdb.py` (поиск классов и встроенная база описаний), `bisign.py` (ключи и подписи),
+`editor.py` (встроенный редактор), `classview.py` (вкладка и окно классов), `app.py` (интерфейс),
+`cli.py` (команды), `integration/` (меню Dolphin/Nautilus/Nemo), `data/` (ярлык, MIME, иконки).
+База ванильных классов `pboviewer/vanilla_classes.tsv.gz` собирается из распакованных конфигов DayZ:
+`python3 tools/build_classdb.py путь/к/DZ`.
 
 ## Благодарности и лицензия
 

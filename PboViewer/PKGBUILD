@@ -1,13 +1,14 @@
 # Локальная сборка: в этой папке выполнить  makepkg -si
 pkgname=pboviewer-gtk
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
-pkgdesc="Просмотр и редактирование архивов PBO (DayZ/Arma) без распаковки: GTK4, Wayland, drag-and-drop"
+pkgdesc="Просмотр и редактирование архивов PBO (DayZ/Arma) без распаковки: GTK4, Wayland, drag-and-drop, редактор config.bin, классы, .bisign"
 arch=('any')
 url="https://github.com/SteezCram/PboViewer"
 license=('GPL-3.0-only')
 depends=('python' 'python-gobject' 'gtk4' 'libadwaita')
-optdepends=('python-nautilus: пункты «Открыть в PboViewer» в меню Nautilus'
+optdepends=('gtksourceview5: подсветка синтаксиса и номера строк во встроенном редакторе'
+            'python-nautilus: пункты «Открыть в PboViewer» в меню Nautilus'
             'dolphin: пункты «Открыть в PboViewer» в меню Dolphin'
             'nemo: пункты «Открыть в PboViewer» в меню Nemo')
 provides=('pboviewer')
@@ -19,7 +20,7 @@ package() {
     local app=org.pboviewer.PboViewer
 
     install -d "$pkgdir/usr/lib/pboviewer/pboviewer"
-    install -m644 "$src"/pboviewer/*.py "$pkgdir/usr/lib/pboviewer/pboviewer/"
+    install -m644 "$src"/pboviewer/*.py "$src"/pboviewer/*.gz "$pkgdir/usr/lib/pboviewer/pboviewer/"
     python -m compileall -q -d /usr/lib/pboviewer/pboviewer "$pkgdir/usr/lib/pboviewer/pboviewer"
 
     install -Dm755 /dev/stdin "$pkgdir$bin" <<'EOF'

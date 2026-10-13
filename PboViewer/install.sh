@@ -13,14 +13,14 @@ APP_ID="org.pboviewer.PboViewer"
 echo "==> Проверка зависимостей"
 if ! python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null; then
     echo "Не найдены GTK4 / libadwaita для Python. Установите:"
-    echo "    sudo pacman -S --needed python python-gobject gtk4 libadwaita"
+    echo "    sudo pacman -S --needed python python-gobject gtk4 libadwaita gtksourceview5"
     exit 1
 fi
 
 echo "==> Программа → $LIB"
 rm -rf "$LIB"
 mkdir -p "$LIB/pboviewer" "$PREFIX/bin"
-cp "$SRC"/pboviewer/*.py "$LIB/pboviewer/"
+cp "$SRC"/pboviewer/*.py "$SRC"/pboviewer/*.gz "$LIB/pboviewer/"
 python3 -m compileall -q "$LIB/pboviewer" || true
 
 cat > "$BIN" <<EOF
