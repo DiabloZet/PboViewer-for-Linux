@@ -11,7 +11,8 @@ from . import __version__
 from . import pbo as P
 
 COMMANDS = ("list", "ls", "extract", "unpack", "pack", "add", "replace", "delete", "rm",
-            "rename", "mv", "prefix", "verify", "info")
+            "rename", "mv", "prefix", "verify", "info", "classes", "keygen", "sign",
+            "checksign", "derap", "rap")
 
 
 def _progress(label):
@@ -86,6 +87,35 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("verify", help="проверить SHA1")
     s.add_argument("pbo")
+
+    s = sub.add_parser("classes", help="классы мода (скрипты и конфиги) с родителями и описанием")
+    s.add_argument("path", nargs="?", help="PBO или папка (рекурсивно); без пути — только встроенная база")
+    s.add_argument("-s", "--search", default="", help="часть имени класса (без учёта регистра)")
+    s.add_argument("-d", "--desc", action="store_true", help="искать по описанию, а не по имени")
+    s.add_argument("-b", "--builtin", action="store_true", help="искать и во встроенной базе DayZ")
+    s.add_argument("-r", "--read-class", metavar="CLASS", help="показать код класса")
+
+    s = sub.add_parser("keygen", help="создать пару ключей .biprivatekey / .bikey (как DSCreateKey)")
+    s.add_argument("name", help="имя ключа (authority)")
+    s.add_argument("-o", "--out", default=".", help="папка для ключей")
+
+    s = sub.add_parser("sign", help="подписать PBO: создать .bisign (как DSSignFile)")
+    s.add_argument("key", help="файл .biprivatekey")
+    s.add_argument("pbos", nargs="+")
+    s.add_argument("-v", "--version", type=int, choices=(2, 3), default=3, help="версия подписи")
+
+    s = sub.add_parser("checksign", help="проверить .bisign открытым ключом .bikey")
+    s.add_argument("bikey")
+    s.add_argument("pbo")
+    s.add_argument("bisign", nargs="?")
+
+    s = sub.add_parser("derap", help="config.bin → текст")
+    s.add_argument("file")
+    s.add_argument("-o", "--out", help="куда записать (по умолчанию stdout)")
+
+    s = sub.add_parser("rap", help="текст config.cpp → config.bin")
+    s.add_argument("file")
+    s.add_argument("-o", "--out", help="файл .bin (по умолчанию рядом, с расширением .bin)")
     return p
 
 
@@ -94,7 +124,7 @@ def main(argv: list[str]) -> int:
     cmd = {"ls": "list", "rm": "delete", "mv": "rename"}.get(args.cmd, args.cmd)
     try:
         return _run(cmd, args)
-    except (P.PboError, OSError) as e:
+    except (P.PboError, OSError, ValueError) as e:
         print(f"Ошибка: {e}", file=sys.stderr)
         return 1
 
@@ -107,6 +137,9 @@ def _run(cmd, args) -> int:
                           progress=_progress("Упаковка"))
         print(f"{out}: {len(a.entries)} файлов, префикс: {a.prefix or '—'}")
         return 0
+
+    if cmd in ("classes", "keygen", "sign", "checksign", "derap", "rap"):
+        return _run_tools(cmd, args)
 
     a = P.PboArchive.open(args.pbo)
 
@@ -189,3 +222,89 @@ def _run(cmd, args) -> int:
         print({None: "контрольной суммы нет", True: "OK", False: "НЕ СОВПАДАЕТ"}[ok])
         return 0 if ok is not False else 2
     return 0
+
+
+def _run_tools(cmd, args) -> int:
+    from . import bisign as B
+    from . import classes as K
+    from . import config as C
+
+    if cmd == "classes":
+        errors: list = []
+        found = K.scan_path(args.path, errors=errors) if args.path else []
+        pool = found + (K.builtin_classes() if args.builtin or not args.path else [])
+        K.ClassIndex(pool)
+        if args.read_class:
+            name = args.read_class.lower()
+            shown = 0
+            for c in pool:
+                if c.name.lower() != name or not c.line:
+                    continue
+                text = _read_source(c)
+                if text is None:
+                    continue
+                print("=" * 80)
+                print(f"{c.name}  ({c.location}:{c.line})")
+                print("=" * 80)
+                print(K.class_source(text, c.line))
+                shown += 1
+            if not shown:
+                raise P.PboError(f"Класс не найден: {args.read_class}")
+            return 0
+        res = K.search(pool, args.search, "desc" if args.desc else "name")
+        for c in res:
+            print(f"{c.name:<36} {(c.parent or '-'):<26} {c.kind_label:<7} "
+                  f"{c.location + (':' + str(c.line) if c.line else ''):<50} {c.description}")
+        print(f"Найдено классов: {len(res)}", file=sys.stderr)
+        for e in errors:
+            print(f"[ошибка] {e}", file=sys.stderr)
+    elif cmd == "keygen":
+        os.makedirs(args.out, exist_ok=True)
+        key = B.generate_key(args.name)
+        priv = os.path.join(args.out, args.name + ".biprivatekey")
+        pub = os.path.join(args.out, args.name + ".bikey")
+        if os.path.exists(priv):
+            raise P.PboError(f"Уже существует: {priv}")
+        key.save(priv)
+        key.public.save(pub)
+        print(priv)
+        print(pub)
+    elif cmd == "sign":
+        key = B.PrivateKey.load(args.key)
+        for p in args.pbos:
+            print(B.sign_pbo(p, key, args.version))
+    elif cmd == "checksign":
+        pub = B.PublicKey.load(args.bikey)
+        path = args.bisign or B.bisign_path(os.path.abspath(args.pbo), pub.name)
+        ok = B.verify_pbo(args.pbo, pub, B.Signature.load(path))
+        print("подпись верна" if ok else "ПОДПИСЬ НЕ СОВПАДАЕТ")
+        return 0 if ok else 2
+    elif cmd == "derap":
+        with open(args.file, "rb") as f:
+            text = C.derapify(f.read())
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(text)
+        else:
+            sys.stdout.write(text)
+    elif cmd == "rap":
+        with open(args.file, encoding="utf-8-sig") as f:
+            data = C.rapify(f.read())
+        out = args.out or os.path.splitext(args.file)[0] + ".bin"
+        with open(out, "wb") as f:
+            f.write(data)
+        print(out)
+    return 0
+
+
+def _read_source(c):
+    from . import classes as K
+    try:
+        if c.pbo:
+            a = P.PboArchive.open(c.pbo)
+            e = a.find(c.file)
+            return K.file_text(a.read(e)) if e else None
+        with open(c.file, "rb") as f:
+            return K.file_text(f.read())
+    except (OSError, P.PboError):
+        return None

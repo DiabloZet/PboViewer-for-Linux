@@ -22,7 +22,11 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from . import APP_ID, __version__  # noqa: E402
+from . import bisign as B  # noqa: E402
+from . import classes as K  # noqa: E402
 from . import pbo as P  # noqa: E402
+from .classview import ClassBrowser, ClassSearchWindow  # noqa: E402
+from .editor import DiskTarget, EditorWindow, is_text_name  # noqa: E402
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
@@ -40,7 +44,8 @@ def cache_root() -> str:
 
 
 class Settings:
-    DEFAULTS = {"backup": False, "confirm_replace": True}
+    DEFAULTS = {"backup": False, "confirm_replace": True, "auto_sign": False, "sign_key": "",
+                "sign_version": 3}
 
     def __init__(self):
         self.data = dict(self.DEFAULTS)
@@ -66,7 +71,7 @@ class Settings:
 def cleanup_cache(max_age_hours: float = 12) -> None:
     """Удаляет старые временные файлы, оставшиеся после перетаскивания/копирования."""
     now = time.time()
-    for kind in ("drag", "clip"):
+    for kind in ("drag", "clip", "edit"):
         base = os.path.join(cache_root(), kind)
         try:
             names = os.listdir(base)
@@ -102,6 +107,49 @@ def _same_file(a: str, b: str) -> bool:
 
 def is_pbo(path: str) -> bool:
     return path.lower().endswith(".pbo") and os.path.isfile(path)
+
+
+class ArchiveTarget:
+    """Файл внутри открытого PBO для встроенного редактора: сохранение сразу пишет архив."""
+
+    def __init__(self, win: "PboWindow", inner: str):
+        self.win = win
+        self.archive_path = win.archive.path
+        self.inner = inner
+        self.title = inner.rsplit("\\", 1)[-1]
+        self.subtitle = f"{os.path.basename(self.archive_path)} \\ {inner}"
+
+    def load(self) -> bytes:
+        e = self.win.archive.find(self.inner)
+        if e is None:
+            raise P.PboError(f"Нет в архиве: {self.inner}")
+        return self.win.archive.read(e)
+
+    def same(self, other) -> bool:
+        return isinstance(other, ArchiveTarget) and other.archive_path == self.archive_path \
+            and P.path_key(other.inner) == P.path_key(self.inner)
+
+    def save(self, data: bytes, done: Callable[[Optional[str]], None]) -> None:
+        w = self.win
+        if w.archive is None or w.archive.path != self.archive_path:
+            done("Архив, из которого открыт файл, уже закрыт. Сохраните копию на диск (Ctrl+Shift+S).")
+            return
+        if w.busy:
+            done("Архив сейчас занят другой операцией — повторите через секунду.")
+            return
+        key = hashlib.sha1(self.archive_path.encode()).hexdigest()[:10]
+        tmp = os.path.join(cache_root(), "edit", key, P.safe_relpath(self.inner) or "file")
+        try:
+            os.makedirs(os.path.dirname(tmp), exist_ok=True)
+            with open(tmp, "wb") as f:
+                f.write(data)
+            plan = w.archive.edit()
+            plan.add_file(self.inner, tmp)
+        except (OSError, P.PboError) as e:
+            done(str(e))
+            return
+        w.commit(plan, f"Сохранено в архив: {self.inner}", on_done=lambda: done(None),
+                 on_error=lambda msg: done(msg))
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +217,15 @@ MENU_XML = """
       <item><attribute name="label">Проверить контрольную сумму</attribute><attribute name="action">win.verify</attribute></item>
     </section>
     <section>
+      <item><attribute name="label">Поиск классов (моды и база DayZ)…</attribute><attribute name="action">app.class-search</attribute></item>
+      <item><attribute name="label">Открыть файл в редакторе (.bin, .cfg, .cpp…)…</attribute><attribute name="action">win.edit-disk-file</attribute></item>
+    </section>
+    <section>
+      <item><attribute name="label">Подписать PBO (.bisign)…</attribute><attribute name="action">win.sign</attribute></item>
+      <item><attribute name="label">Создать ключи подписи (.bikey)…</attribute><attribute name="action">win.keygen</attribute></item>
+      <item><attribute name="label">Обновлять .bisign после изменений</attribute><attribute name="action">app.auto-sign</attribute></item>
+    </section>
+    <section>
       <item><attribute name="label">Создавать резервную копию (.bak)</attribute><attribute name="action">app.backup</attribute></item>
       <item><attribute name="label">Спрашивать перед заменой файлов</attribute><attribute name="action">app.confirm-replace</attribute></item>
     </section>
@@ -187,6 +244,8 @@ MENU_XML = """
   <menu id="context">
     <section>
       <item><attribute name="label">Открыть</attribute><attribute name="action">win.open-selected</attribute></item>
+      <item><attribute name="label">Редактировать во встроенном редакторе</attribute><attribute name="action">win.edit</attribute></item>
+      <item><attribute name="label">Открыть во внешней программе</attribute><attribute name="action">win.open-external</attribute></item>
       <item><attribute name="label">Извлечь в…</attribute><attribute name="action">win.extract</attribute></item>
     </section>
     <section>
@@ -208,9 +267,10 @@ MENU_XML = """
 </interface>
 """
 
-SELECTION_ACTIONS = ("open-selected", "extract", "copy", "copy-path", "rename", "delete", "replace")
+SELECTION_ACTIONS = ("open-selected", "extract", "copy", "copy-path", "rename", "delete", "replace",
+                     "edit", "open-external")
 ARCHIVE_ACTIONS = ("add-files", "add-folder", "new-folder", "paste", "extract-all",
-                   "properties", "verify", "go-up")
+                   "properties", "verify", "go-up", "sign", "show-files", "show-classes")
 
 
 class PboWindow(Adw.ApplicationWindow):
@@ -224,6 +284,8 @@ class PboWindow(Adw.ApplicationWindow):
         self.search_text = ""
         self._drag_items: Optional[list[Item]] = None
         self._watches: dict[str, dict] = {}
+        self.classes: list[K.ClassInfo] = []
+        self._scan_gen = 0
         self.set_title("PboViewer")
         self._build_ui()
         self._build_actions()
@@ -252,6 +314,8 @@ class PboWindow(Adw.ApplicationWindow):
         self.btn_up = Gtk.Button(icon_name="go-up-symbolic", tooltip_text="Вверх (Backspace)")
         self.btn_up.set_action_name("win.go-up")
         self.header.pack_start(self.btn_up)
+        self.switcher = Adw.ViewSwitcher(policy=Adw.ViewSwitcherPolicy.WIDE, visible=False)
+        self.header.pack_start(self.switcher)
 
         menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic", tooltip_text="Меню",
                                   menu_model=builder.get_object("primary"), primary=True)
@@ -283,9 +347,16 @@ class PboWindow(Adw.ApplicationWindow):
         self.search_bar.connect("notify::search-mode-enabled", self._on_search_mode)
         tv.add_top_bar(self.search_bar)
 
-        # --- содержимое
+        # --- содержимое: вкладки «Файлы» и «Классы»
+        self.pages = Adw.ViewStack()
+        tv.set_content(self.pages)
+        self.switcher.set_stack(self.pages)
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
-        tv.set_content(self.stack)
+        self.files_page = self.pages.add_titled_with_icon(self.stack, "files", "Файлы", "folder-symbolic")
+        self.class_browser = ClassBrowser(self.class_source, self.open_class)
+        self.classes_page = self.pages.add_titled_with_icon(self.class_browser, "classes", "Классы",
+                                                            "text-x-script-symbolic")
+        self.pages.connect("notify::visible-child-name", self._on_page_changed)
 
         empty = Adw.StatusPage(
             icon_name=APP_ID,
@@ -468,7 +539,14 @@ class PboWindow(Adw.ApplicationWindow):
         add("new-folder", lambda *a: self.new_folder_dialog())
         add("context-menu", lambda *a: self._show_context_menu(None, None))
         add("shortcuts", lambda *a: self.show_shortcuts())
-        add("search", lambda *a: self.btn_search.set_active(not self.btn_search.get_active()))
+        add("search", lambda *a: self.toggle_search())
+        add("edit", lambda *a: self.edit_selected())
+        add("open-external", lambda *a: self.open_selected(external=True))
+        add("edit-disk-file", lambda *a: self.edit_disk_file_dialog())
+        add("sign", lambda *a: self.sign_dialog())
+        add("keygen", lambda *a: self.keygen_dialog())
+        add("show-files", lambda *a: self.pages.set_visible_child_name("files"))
+        add("show-classes", lambda *a: self.pages.set_visible_child_name("classes"))
         add("update-edited", lambda a, v: self.update_edited(v.get_string()),
             GLib.VariantType.new("s"))
 
@@ -487,6 +565,12 @@ class PboWindow(Adw.ApplicationWindow):
         self._enable("go-up", has and bool(self.cwd) and not self.search_text)
         self._enable("rename", has and len(sel) == 1)
         self._enable("replace", has and len(sel) == 1 and not sel[0].is_dir)
+        files_sel = [i for i in sel if not i.is_dir]
+        self._enable("edit", has and bool(files_sel))
+        self._enable("open-external", has and bool(files_sel))
+        self._enable("keygen", not self.busy)
+        self._enable("edit-disk-file", True)
+        self.switcher.set_visible(self.archive is not None)
         self._enable("extract-or-all", has)
         for n in ("open", "new-pbo", "pack-folder"):
             self._enable(n, not self.busy)
@@ -508,6 +592,7 @@ class PboWindow(Adw.ApplicationWindow):
         self.btn_search.set_active(False)
         self.app.add_recent(path)
         self.refresh()
+        self.scan_classes()
         return True
 
     def refresh(self, keep_scroll: bool = False):
@@ -515,6 +600,7 @@ class PboWindow(Adw.ApplicationWindow):
         self.store.remove_all()
         if a is None:
             self.stack.set_visible_child_name("empty")
+            self.pages.set_visible_child_name("files")
             self.title_widget.set_title("PboViewer")
             self.title_widget.set_subtitle("")
             self.status.set_text("")
@@ -633,7 +719,7 @@ class PboWindow(Adw.ApplicationWindow):
     # ------------------------------------------------------ фоновые задачи
 
     def run_task(self, label: str, func: Callable, on_done: Callable = None,
-                 error_title: str = "Ошибка"):
+                 error_title: str = "Ошибка", on_error: Callable[[str], None] = None):
         """func(progress) выполняется в отдельном потоке, on_done(result) — в главном."""
         self.busy = True
         self.header.set_sensitive(False)
@@ -658,7 +744,10 @@ class PboWindow(Adw.ApplicationWindow):
             if err is not None:
                 print(tb, file=sys.stderr)
                 self.refresh_safe()
-                self.error(error_title, str(err) or err.__class__.__name__)
+                if on_error:
+                    on_error(str(err) or err.__class__.__name__)
+                else:
+                    self.error(error_title, str(err) or err.__class__.__name__)
             elif on_done:
                 on_done(result)
             self._update_state()
@@ -683,12 +772,33 @@ class PboWindow(Adw.ApplicationWindow):
                 self.archive = None
         self.refresh()
 
-    def commit(self, plan: P.EditPlan, message: str):
+    def commit(self, plan: P.EditPlan, message: str, on_done: Callable[[], None] = None,
+               on_error: Callable[[str], None] = None):
         backup = self.app.settings.get("backup")
-        self.run_task("Запись архива…",
-                      lambda progress: plan.commit(backup=backup, progress=progress),
-                      lambda _res: (self.refresh(), self.toast(message)),
-                      "Не удалось изменить архив")
+        key = self.app.settings.get("sign_key") if self.app.settings.get("auto_sign") else ""
+        version = int(self.app.settings.get("sign_version") or 3)
+
+        def work(progress):
+            a = plan.commit(backup=backup, progress=progress)
+            if key and os.path.isfile(key):
+                try:
+                    return B.sign_pbo(a.path, B.PrivateKey.load(key), version)
+                except (OSError, B.SignError, P.PboError) as e:
+                    return e
+            return None
+
+        def done(signed):
+            self.refresh()
+            self.scan_classes()
+            if isinstance(signed, Exception):
+                self.toast(f"{message}. Подпись не обновлена: {signed}")
+            elif signed:
+                self.toast(f"{message} · подпись {os.path.basename(signed)} обновлена")
+            else:
+                self.toast(message)
+            if on_done:
+                on_done()
+        self.run_task("Запись архива…", work, done, "Не удалось изменить архив", on_error)
 
     # ------------------------------------------------------ сообщения
 
@@ -908,16 +1018,63 @@ class PboWindow(Adw.ApplicationWindow):
 
     # ------------------------------------------------------ открытие файлов
 
-    def open_selected(self):
+    def open_selected(self, external: bool = False):
         items = self.selected_items()
-        if len(items) == 1 and items[0].is_dir:
+        if len(items) == 1 and items[0].is_dir and not external:
             self.navigate(items[0].path)
             return
         for it in items:
             if not it.is_dir:
-                self.open_item(it)
+                self.open_item(it, external)
 
-    def open_item(self, item: Item):
+    def open_item(self, item: Item, external: bool = False):
+        """Текстовые файлы и config.bin — во встроенном редакторе, остальное — программой по умолчанию."""
+        if not external and is_text_name(item.name):
+            if self.edit_inner(item.path, quiet=True):
+                return
+        self.open_external(item)
+
+    def edit_selected(self):
+        for it in self.selected_items():
+            if not it.is_dir:
+                self.edit_inner(it.path)
+
+    def edit_inner(self, inner: str, line: int = 0, quiet: bool = False) -> bool:
+        """Открывает файл архива во встроенном редакторе. False — файл не текстовый."""
+        if self.archive is None:
+            return False
+        target = ArchiveTarget(self, inner)
+        existing = self.app.find_editor(target)
+        if existing:
+            existing.present()
+            if line:
+                existing.goto_line(line)
+            return True
+        try:
+            win = EditorWindow(self.app, target, line)
+        except ValueError as e:
+            if not quiet:
+                self.error("Нельзя открыть в редакторе", f"{inner}\n\n{e}")
+            return False
+        except Exception as e:  # noqa: BLE001
+            self.error("Не удалось открыть файл", f"{inner}\n\n{e}")
+            return True
+        win.present()
+        return True
+
+    def edit_disk_file_dialog(self):
+        dlg = Gtk.FileDialog(title="Открыть файл в редакторе")
+        self._initial_folder(dlg)
+
+        def done(d, res):
+            try:
+                path = d.open_finish(res).get_path()
+            except GLib.Error:
+                return
+            self.app.edit_file(path)
+        dlg.open(self, None, done)
+
+    def open_external(self, item: Item):
         key = hashlib.sha1(self.archive.path.encode()).hexdigest()[:10]
         dest = os.path.join(cache_root(), "open", key, P.safe_relpath(item.path))
         try:
@@ -1363,13 +1520,181 @@ class PboWindow(Adw.ApplicationWindow):
         self.run_task("Проверка SHA1…", lambda progress: a.verify(progress), done)
 
     def show_shortcuts(self):
-        text = ("Ctrl+O — открыть PBO\nCtrl+F — поиск по архиву\nEnter / двойной щелчок — открыть\n"
+        text = ("Ctrl+O — открыть PBO\nCtrl+F — поиск по архиву (на вкладке «Классы» — поиск класса)\n"
+                "Alt+1 / Alt+2 — вкладки «Файлы» / «Классы»\n"
+                "Ctrl+Shift+F — поиск классов во всех модах и базе DayZ\n"
+                "Enter / двойной щелчок — открыть (текст, .cfg, .cpp, config.bin — во встроенном редакторе)\n"
+                "F4 — редактировать во встроенном редакторе\n"
                 "Backspace, Alt+↑ — вверх\nF2 — переименовать\nDelete — удалить\n"
                 "Ctrl+C / Ctrl+V — копировать из архива / вставить в архив\n"
                 "Shift+F10, Menu — контекстное меню\nCtrl+W — закрыть окно\n\n"
                 "Перетаскивание файлов в окно — добавить (или заменить) в текущую папку; "
-                "на строку папки — в эту папку. Из окна наружу — извлечь.")
+                "на строку папки — в эту папку. Из окна наружу — извлечь.\n\n"
+                "В редакторе: Ctrl+S сохранить в архив, Ctrl+Z/Ctrl+Y, Ctrl+F/Ctrl+H, Ctrl+G, "
+                "Ctrl+D, Ctrl+/, Alt+↑/↓ — полный список в меню редактора.")
         self.error("Горячие клавиши", text)
+
+    # ------------------------------------------------------ классы
+
+    def toggle_search(self):
+        if self.archive is not None and self.pages.get_visible_child_name() == "classes":
+            self.class_browser.focus_search()
+            return
+        self.btn_search.set_active(not self.btn_search.get_active())
+
+    def _on_page_changed(self, *_a):
+        on_classes = self.pages.get_visible_child_name() == "classes"
+        if on_classes and self.btn_search.get_active():
+            self.btn_search.set_active(False)
+        self.btn_search.set_visible(not on_classes)
+        self.btn_up.set_visible(not on_classes)
+        if on_classes:
+            GLib.idle_add(self.class_browser.focus_search)
+
+    def scan_classes(self):
+        """Классы мода (скрипты .c и конфиги) — в фоне, после открытия и каждого изменения."""
+        self._scan_gen += 1
+        gen = self._scan_gen
+        a = self.archive
+        if a is None:
+            self.classes = []
+            self.class_browser.set_classes([])
+            self.classes_page.set_badge_number(0)
+            return
+        self.class_browser.status.set_text("Поиск классов в архиве…")
+
+        def work():
+            errors: list = []
+            try:
+                found = K.scan_archive(P.PboArchive.open(a.path), errors)
+            except Exception as e:  # noqa: BLE001
+                found, errors = [], [str(e)]
+            GLib.idle_add(done, found, errors)
+
+        def done(found, errors):
+            if gen != self._scan_gen:
+                return False
+            self.classes = found
+            for e in errors[:20]:
+                print("[classes]", e, file=sys.stderr)
+            empty = ("В этом PBO нет скриптов (.c) и конфигов (config.cpp / config.bin). "
+                     "Включите «База DayZ», чтобы искать по ванильным классам.")
+            self.class_browser.set_classes(found, empty)
+            self.classes_page.set_badge_number(len(found))
+            return False
+        threading.Thread(target=work, daemon=True).start()
+
+    def class_source(self, info: K.ClassInfo) -> Optional[str]:
+        return self.app.class_source(info)
+
+    def open_class(self, info: K.ClassInfo):
+        self.app.open_class(info)
+
+    # ------------------------------------------------------ подпись
+
+    def _key_filter_store(self):
+        f = Gtk.FileFilter(name="Закрытый ключ (.biprivatekey)")
+        f.add_pattern("*.biprivatekey")
+        store = Gio.ListStore(item_type=Gtk.FileFilter)
+        store.append(f)
+        return store
+
+    def sign_dialog(self):
+        a = self.archive
+        if not a:
+            return
+        st = self.app.settings
+        state = {"key": st.get("sign_key") or ""}
+        box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        key_row = Adw.ActionRow(title="Закрытый ключ", subtitle=state["key"] or "не выбран",
+                                subtitle_lines=2)
+        choose = Gtk.Button(label="Выбрать…", valign=Gtk.Align.CENTER)
+        create = Gtk.Button(label="Создать…", valign=Gtk.Align.CENTER)
+        key_row.add_suffix(choose)
+        key_row.add_suffix(create)
+        box.append(key_row)
+        ver_row = Adw.ComboRow(title="Версия подписи",
+                               model=Gtk.StringList.new(["v3 (DayZ, Arma 3)", "v2 (старая)"]))
+        ver_row.set_selected(0 if int(st.get("sign_version") or 3) == 3 else 1)
+        box.append(ver_row)
+        auto = Adw.SwitchRow(title="Обновлять подпись после каждого изменения архива",
+                             active=bool(st.get("auto_sign")))
+        box.append(auto)
+
+        def set_key(path):
+            state["key"] = path
+            key_row.set_subtitle(path)
+            st.set("sign_key", path)
+
+        def pick(*_):
+            dlg = Gtk.FileDialog(title="Закрытый ключ .biprivatekey")
+            dlg.set_filters(self._key_filter_store())
+            if state["key"] and os.path.isdir(os.path.dirname(state["key"])):
+                dlg.set_initial_folder(Gio.File.new_for_path(os.path.dirname(state["key"])))
+
+            def done(d, res):
+                try:
+                    set_key(d.open_finish(res).get_path())
+                except GLib.Error:
+                    pass
+            dlg.open(self, None, done)
+        choose.connect("clicked", pick)
+        create.connect("clicked", lambda *_: self.keygen_dialog(set_key))
+
+        def resp(r):
+            version = 3 if ver_row.get_selected() == 0 else 2
+            st.set("sign_version", version)
+            st.set("auto_sign", auto.get_active())
+            act = self.app.lookup_action("auto-sign")
+            if act:
+                act.set_state(GLib.Variant("b", auto.get_active()))
+            if r != "sign":
+                return
+            if not state["key"] or not os.path.isfile(state["key"]):
+                self.error("Нет ключа", "Выберите файл .biprivatekey или создайте новую пару ключей.")
+                return
+            key_path = state["key"]
+
+            def work(_progress):
+                return B.sign_pbo(a.path, B.PrivateKey.load(key_path), version)
+            self.run_task("Подпись…", work,
+                          lambda path: self.toast(f"Создан {os.path.basename(path)} — "
+                                                  f"на сервер положите .bikey в папку keys", timeout=6),
+                          "Не удалось подписать PBO")
+        self.ask("Подписать PBO", f"Будет создан файл {os.path.basename(a.path)}.<ключ>.bisign "
+                 "рядом с архивом (как DSSignFile).",
+                 [("cancel", "Закрыть", ""), ("sign", "Подписать", "suggested")], resp,
+                 extra=box, default="sign")
+
+    def keygen_dialog(self, on_created: Callable[[str], None] = None):
+        def named(name):
+            if not name or any(c in name for c in "\\/\0"):
+                return
+
+            def folder(dest):
+                priv = os.path.join(dest, name + ".biprivatekey")
+                pub = os.path.join(dest, name + ".bikey")
+                if os.path.exists(priv):
+                    self.error("Ключ уже существует", priv)
+                    return
+
+                def work(_progress):
+                    k = B.generate_key(name)
+                    k.save(priv)
+                    k.public.save(pub)
+                    return priv
+
+                def done(path):
+                    self.app.settings.set("sign_key", path)
+                    if on_created:
+                        on_created(path)
+                    self.toast(f"Созданы {name}.biprivatekey и {name}.bikey. Закрытый ключ никому "
+                               f"не передавайте, .bikey — на сервер в папку keys.", timeout=8)
+                self.run_task("Создание ключей…", work, done, "Не удалось создать ключи")
+            self._pick_folder("Папка для ключей", folder)
+        self.prompt("Новые ключи подписи", "Имя ключа (authority), например MyMod или ник автора. "
+                    "Будут созданы .biprivatekey (закрытый) и .bikey (открытый, для сервера).",
+                    "MyMod", "Далее", named)
 
     # ------------------------------------------------------ закрытие
 
@@ -1472,7 +1797,8 @@ class PboApp(Adw.Application):
             Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(icons)
         Gtk.Window.set_default_icon_name(APP_ID)
 
-        for name, key in (("backup", "backup"), ("confirm-replace", "confirm_replace")):
+        for name, key in (("backup", "backup"), ("confirm-replace", "confirm_replace"),
+                          ("auto-sign", "auto_sign")):
             act = Gio.SimpleAction.new_stateful(name, None, GLib.Variant("b", bool(self.settings.get(key))))
 
             def toggled(a, _p, key=key):
@@ -1481,6 +1807,9 @@ class PboApp(Adw.Application):
                 self.settings.set(key, v)
             act.connect("activate", toggled)
             self.add_action(act)
+        cs = Gio.SimpleAction.new("class-search", None)
+        cs.connect("activate", lambda *a: self.class_search())
+        self.add_action(cs)
         about = Gio.SimpleAction.new("about", None)
         about.connect("activate", self._about)
         self.add_action(about)
@@ -1493,6 +1822,10 @@ class PboApp(Adw.Application):
         self.set_accels_for_action("win.go-up", ["<Alt>Up"])
         self.set_accels_for_action("window.close", ["<Control>w"])
         self.set_accels_for_action("app.quit", ["<Control>q"])
+        self.set_accels_for_action("app.class-search", ["<Control><Shift>f"])
+        self.set_accels_for_action("win.edit", ["F4"])
+        self.set_accels_for_action("win.show-files", ["<Alt>1"])
+        self.set_accels_for_action("win.show-classes", ["<Alt>2"])
         threading.Thread(target=cleanup_cache, daemon=True).start()
 
     def do_activate(self):
@@ -1511,6 +1844,10 @@ class PboApp(Adw.Application):
     def open_paths(self, paths: list[str], window: Optional[PboWindow]):
         for p in paths:
             if os.path.isdir(p):
+                continue
+            if not p.lower().endswith(".pbo") and os.path.isfile(p):
+                # config.bin, .cfg, .cpp… — сразу во встроенный редактор
+                self.edit_file(p)
                 continue
             # уже открыт — просто показать окно
             existing = next((w for w in self.get_windows()
@@ -1531,6 +1868,82 @@ class PboApp(Adw.Application):
         if not self.get_windows():
             PboWindow(self).present()
 
+    # --- редактор и классы
+
+    def find_editor(self, target) -> Optional[EditorWindow]:
+        for w in self.get_windows():
+            if isinstance(w, EditorWindow) and w.target.same(target):
+                return w
+        return None
+
+    def edit_file(self, path: str, line: int = 0) -> bool:
+        target = DiskTarget(path)
+        existing = self.find_editor(target)
+        if existing:
+            existing.present()
+            if line:
+                existing.goto_line(line)
+            return True
+        try:
+            win = EditorWindow(self, target, line)
+        except Exception as e:  # noqa: BLE001
+            parent = self.get_active_window()
+            if parent is None:
+                parent = PboWindow(self)
+                parent.present()
+            d = Adw.AlertDialog(heading="Нельзя открыть в редакторе", body=f"{path}\n\n{e}")
+            d.add_response("ok", "Закрыть")
+            d.present(parent)
+            return False
+        win.present()
+        return True
+
+    def pbo_windows(self) -> list[PboWindow]:
+        return [w for w in self.get_windows() if isinstance(w, PboWindow)]
+
+    def open_archive_classes(self):
+        for w in self.pbo_windows():
+            if w.archive is not None:
+                yield from w.classes
+
+    def class_source(self, info: K.ClassInfo) -> Optional[str]:
+        if info.pbo:
+            for w in self.pbo_windows():
+                if w.archive is not None and _same_file(w.archive.path, info.pbo):
+                    e = w.archive.find(info.file)
+                    return K.file_text(w.archive.read(e)) if e else None
+            a = P.PboArchive.open(info.pbo)
+            e = a.find(info.file)
+            return K.file_text(a.read(e)) if e else None
+        if info.file and os.path.isfile(info.file):
+            with open(info.file, "rb") as f:
+                return K.file_text(f.read())
+        return None
+
+    def open_class(self, info: K.ClassInfo):
+        """Открывает файл класса в редакторе на строке объявления."""
+        if not info.line:
+            return
+        if info.pbo:
+            win = next((w for w in self.pbo_windows() if w.archive is not None
+                        and _same_file(w.archive.path, info.pbo)), None)
+            if win is None:
+                self.open_paths([info.pbo], None)
+                win = next((w for w in self.pbo_windows() if w.archive is not None
+                            and _same_file(w.archive.path, info.pbo)), None)
+            if win is not None:
+                win.edit_inner(info.file, info.line)
+        elif info.file:
+            self.edit_file(info.file, info.line)
+
+    def class_search(self):
+        win = next((w for w in self.get_windows() if isinstance(w, ClassSearchWindow)), None)
+        if win is None:
+            win = ClassSearchWindow(self)
+        else:
+            win.reload()
+        win.present()
+
     def add_recent(self, path: str):
         self.last_dir = os.path.dirname(path)
         self.settings.set("last_dir", self.last_dir)
@@ -1548,7 +1961,8 @@ class PboApp(Adw.Application):
             developers=["DiabloZet (порт на GTK 4 / Linux)", "Thomas «Steez» Croizet (оригинальный PboViewer)"],
             license_type=Gtk.License.GPL_3_0,
             comments="Просмотр и редактирование архивов PBO (DayZ / Arma) без распаковки: "
-                     "перетаскивание файлов в архив и из него, замена, удаление, префикс.",
+                     "перетаскивание файлов в архив и из него, замена, удаление, префикс, "
+                     "встроенный редактор (в т.ч. config.bin), классы мода, подпись .bisign.",
             website="https://github.com/SteezCram/PboViewer",
         )
         d.present(self.get_active_window())
