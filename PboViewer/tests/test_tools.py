@@ -137,7 +137,24 @@ class ClassTests(unittest.TestCase):
             self.assertIn("MyCar", {c.name for c in found})
 
 
+DATA = os.path.join(os.path.dirname(__file__), "data")
+
+
 class SignTests(unittest.TestCase):
+    def test_matches_dssignfile(self):
+        """Подписи побайтно совпадают с DSSignFile.exe 1.03 (DayZ Tools) на том же ключе.
+
+        fixture.pbo: префикс с «\\» на конце, записи не по алфавиту, LZSS-запись, кириллица,
+        пустой файл, расширения в разном регистре."""
+        key = B.PrivateKey.load(os.path.join(DATA, "test.biprivatekey"))
+        pbo = os.path.join(DATA, "fixture.pbo")
+        with tempfile.TemporaryDirectory() as d:
+            for version in (2, 3):
+                out = B.sign_pbo(pbo, key, version, dest=os.path.join(d, f"v{version}.bisign"))
+                with open(out, "rb") as f, \
+                        open(os.path.join(DATA, f"fixture.pbo.v{version}.dssignfile.bisign"), "rb") as ref:
+                    self.assertEqual(f.read(), ref.read(), f"v{version}")
+
     def test_sign_and_verify(self):
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "mod")
