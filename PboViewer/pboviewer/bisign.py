@@ -2,10 +2,13 @@
 
 Подпись: три RSA-подписи (PKCS#1 v1.5, SHA1) от хэшей PBO:
     hash1 = SHA1 всего архива (то же, что записано в конце PBO)
-    hash2 = SHA1(hash1 + namehash + префикс\\)
-    hash3 = SHA1(filehash + namehash + префикс\\)
-namehash — SHA1 имён файлов (в нижнем регистре, по алфавиту, без пустых файлов),
-filehash — SHA1 содержимого файлов, отобранных по расширению (версия подписи 2 или 3).
+    hash2 = SHA1(hash1 + namehash + префикс + "\\")
+    hash3 = SHA1(filehash + namehash + префикс + "\\")
+namehash — SHA1 имён файлов (латиница в нижнем регистре, по алфавиту, без пустых файлов),
+filehash — SHA1 содержимого файлов в порядке архива (данные как есть, без распаковки),
+отобранных по расширению (версия подписи 2 или 3).
+
+Правила сверены побайтно с DSSignFile.exe 1.03 из DayZ Tools.
 """
 
 from __future__ import annotations
@@ -22,10 +25,12 @@ from . import pbo as P
 PUBLIC_MAGIC = b"\x06\x02\x00\x00\x00\x24\x00\x00RSA1"
 PRIVATE_MAGIC = b"\x07\x02\x00\x00\x00\x24\x00\x00RSA2"
 
+# Списки расширений DayZ-версии DSSignFile (регистр не важен).
 # v2: хэшируются все файлы, кроме этих расширений
-V2_EXCLUDE = {"paa", "jpg", "p3d", "tga", "rvmat", "lip", "ogg", "wss", "png", "rtm", "pac", "fxy", "wrp"}
+V2_EXCLUDE = {"paa", "jpg", "p3d", "tga", "rvmat", "lip", "ogg", "wss", "png", "rtm", "pac", "fxy", "wrp",
+              "edds", "anm", "xob", "ptc", "emat"}
 # v3: хэшируются только эти расширения
-V3_INCLUDE = {"sqf", "inc", "bikb", "ext", "fsm", "sqm", "hpp", "cfg", "sqs", "h", "sqfc"}
+V3_INCLUDE = {"c", "h", "hpp", "inc", "ext", "cfg", "bikb"}
 
 
 class SignError(Exception):
@@ -195,8 +200,16 @@ def generate_key(name: str, bits: int = 1024, e: int = 65537) -> PrivateKey:
 # Хэши PBO
 # ---------------------------------------------------------------------------
 
+def _ascii_lower(s: str) -> str:
+    """Как DSSignFile: в нижний регистр переводится только латиница (кириллица остаётся как есть)."""
+    return s.translate(_ASCII_LOWER)
+
+
+_ASCII_LOWER = {c: c + 32 for c in range(ord("A"), ord("Z") + 1)}
+
+
 def _hashed_entries(archive: P.PboArchive) -> list[P.PboEntry]:
-    return sorted(archive.entries, key=lambda e: P.to_pbo_path(e.name).lower())
+    return sorted(archive.entries, key=lambda e: _ascii_lower(P.to_pbo_path(e.name)).encode("utf-8"))
 
 
 def _raw_data(archive: P.PboArchive, e: P.PboEntry, f) -> bytes:
@@ -219,13 +232,13 @@ def pbo_hashes(archive: P.PboArchive, version: int = 3) -> tuple[bytes, bytes, b
     nh = hashlib.sha1()
     for e in entries:
         if e.data_size > 0:
-            nh.update(P.to_pbo_path(e.name).lower().encode("utf-8"))
+            nh.update(_ascii_lower(P.to_pbo_path(e.name)).encode("utf-8"))
     namehash = nh.digest()
 
     fh = hashlib.sha1()
     nothing = True
     with open(archive.path, "rb") as f:
-        for e in entries:
+        for e in archive.entries:  # содержимое — в порядке записей архива, не по алфавиту
             ext = e.name.rsplit(".", 1)[-1].lower() if "." in e.basename else ""
             if version == 2 and ext in V2_EXCLUDE:
                 continue
@@ -238,9 +251,8 @@ def pbo_hashes(archive: P.PboArchive, version: int = 3) -> tuple[bytes, bytes, b
     filehash = fh.digest()
 
     prefix = archive.prefix or ""
-    tail = b""
-    if prefix:
-        tail = prefix.encode("utf-8") + (b"" if prefix.endswith("\\") else b"\\")
+    # DSSignFile добавляет обратный слэш всегда, даже если префикс уже им заканчивается
+    tail = prefix.encode("utf-8") + b"\\" if prefix else b""
     hash2 = hashlib.sha1(hash1 + namehash + tail).digest()
     hash3 = hashlib.sha1(filehash + namehash + tail).digest()
     return hash1, hash2, hash3
