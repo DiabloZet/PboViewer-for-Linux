@@ -12,7 +12,7 @@ from . import pbo as P
 
 COMMANDS = ("list", "ls", "extract", "unpack", "pack", "add", "replace", "delete", "rm",
             "rename", "mv", "prefix", "verify", "info", "classes", "keygen", "sign",
-            "checksign", "derap", "rap")
+            "checksign", "derap", "rap", "extract-scripts", "pack-scripts")
 
 
 def _progress(label):
@@ -109,6 +109,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("pbo")
     s.add_argument("bisign", nargs="?")
 
+    s = sub.add_parser("extract-scripts",
+                       help="вынести .c/.cpp/.bin из PBO в pbo_sources/<имя_pbo>/ (для правки и pack-scripts)")
+    s.add_argument("paths", nargs="*", default=["."], help="PBO или папки с PBO (по умолчанию текущая)")
+    s.add_argument("-o", "--out", help="куда выносить (по умолчанию pbo_sources рядом с PBO)")
+    s.add_argument("-e", "--ext", default="c,cpp,bin", help="расширения через запятую")
+    s.add_argument("--text-bin", action="store_true", help="config.bin сохранять текстом (config.bin.cpp)")
+    s.add_argument("--force", action="store_true", help="перезаписать уже вынесенные папки")
+
+    s = sub.add_parser("pack-scripts", help="вернуть правки из pbo_sources обратно в PBO")
+    s.add_argument("paths", nargs="*", default=["pbo_sources"],
+                   help="папка мода или папка с несколькими модами (по умолчанию ./pbo_sources)")
+    s.add_argument("--all", action="store_true", help="записать все файлы, а не только изменённые")
+    s.add_argument("--pbo-dir", help="где лежат PBO, если их перенесли")
+    s.add_argument("--key", help="переподписать этим .biprivatekey")
+    s.add_argument("-v", "--sign-version", type=int, choices=(2, 3), default=3)
+    s.add_argument("--no-backup", action="store_true", help="не создавать .bak")
+    s.add_argument("--dry-run", action="store_true", help="только показать изменения")
+
     s = sub.add_parser("derap", help="config.bin → текст")
     s.add_argument("file")
     s.add_argument("-o", "--out", help="куда записать (по умолчанию stdout)")
@@ -138,6 +156,8 @@ def _run(cmd, args) -> int:
         print(f"{out}: {len(a.entries)} файлов, префикс: {a.prefix or '—'}")
         return 0
 
+    if cmd in ("extract-scripts", "pack-scripts"):
+        return _run_sources(cmd, args)
     if cmd in ("classes", "keygen", "sign", "checksign", "derap", "rap"):
         return _run_tools(cmd, args)
 
@@ -308,3 +328,29 @@ def _read_source(c):
             return K.file_text(f.read())
     except (OSError, P.PboError):
         return None
+
+
+def _run_sources(cmd, args) -> int:
+    from . import bisign as B
+    from . import sources as S
+
+    if cmd == "extract-scripts":
+        pbos = []
+        for p in args.paths:
+            pbos += S.list_pbos(p) if os.path.isdir(p) else [p]
+        if not pbos:
+            raise P.PboError("PBO не найдены")
+        exts = [x.strip() for x in args.ext.split(",") if x.strip()]
+        total, errors = S.extract_many(pbos, args.out, exts, args.text_bin, args.force, print)
+        print(f"Готово: файлов {total}, ошибок {errors}")
+    else:
+        dirs = []
+        for p in args.paths:
+            dirs += S.mod_dirs(p)
+        if not dirs:
+            raise P.PboError(f"Нет папок с {S.MANIFEST} — сначала extract-scripts")
+        key = B.PrivateKey.load(args.key) if args.key else None
+        changed, errors = S.pack_many(dirs, args.pbo_dir, args.all, not args.no_backup, args.dry_run,
+                                      key, args.sign_version, print)
+        print(f"Готово: изменено PBO {changed}, ошибок {errors}")
+    return 1 if errors else 0

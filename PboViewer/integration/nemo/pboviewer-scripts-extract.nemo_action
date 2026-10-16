@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Вынести скрипты и конфиги из этого PBO
+Comment=Файлы .c/.cpp/.bin → pbo_sources рядом с PBO
+Exec=@BIN@ --extract-scripts %F
+Icon-Name=archive-extract
+Selection=notnone
+Extensions=pbo;

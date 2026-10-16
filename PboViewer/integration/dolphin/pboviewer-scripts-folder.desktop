@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+Actions=extractAll;_SEPARATOR_;pack;packAll;
+X-KDE-Submenu=Scripts and configs (PboViewer)
+X-KDE-Submenu[ru]=Скрипты и конфиги (PboViewer)
+
+[Desktop Action extractAll]
+Name=Extract scripts and configs from all PBOs in the folder
+Name[ru]=Вынести скрипты и конфиги из всех PBO в папке
+Icon=archive-extract
+Exec=@BIN@ --extract-scripts-all %F
+
+[Desktop Action pack]
+Name=Put edits from this mod folder back into its PBO
+Name[ru]=Вернуть правки этой папки в её PBO
+Icon=archive-insert
+Exec=@BIN@ --pack-scripts %F
+
+[Desktop Action packAll]
+Name=Put edits back into all PBOs (pbo_sources or Addons folder)
+Name[ru]=Вернуть правки во все PBO (папка pbo_sources или Addons)
+Icon=archive-insert
+Exec=@BIN@ --pack-scripts-all %F

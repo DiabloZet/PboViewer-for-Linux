@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Вернуть правки скриптов в PBO
+Comment=Изменённые файлы из pbo_sources → в PBO
+Exec=@BIN@ --pack-scripts %F
+Icon-Name=archive-insert
+Selection=notnone
+Extensions=pbo;dir;
