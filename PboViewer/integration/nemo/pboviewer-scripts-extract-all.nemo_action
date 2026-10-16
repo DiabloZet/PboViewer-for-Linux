@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Вынести скрипты и конфиги из всех PBO в папке
+Comment=Все PBO папки → pbo_sources
+Exec=@BIN@ --extract-scripts-all %F
+Icon-Name=archive-extract
+Selection=notnone
+Extensions=pbo;dir;

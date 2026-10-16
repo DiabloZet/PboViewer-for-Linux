@@ -1,0 +1,30 @@
+[Desktop Entry]
+Type=Service
+MimeType=application/x-pbo;
+Actions=extract;extractAll;_SEPARATOR_;pack;packAll;
+X-KDE-Submenu=Scripts and configs (PboViewer)
+X-KDE-Submenu[ru]=Скрипты и конфиги (PboViewer)
+
+[Desktop Action extract]
+Name=Extract scripts and configs from this PBO
+Name[ru]=Вынести скрипты и конфиги из этого PBO
+Icon=archive-extract
+Exec=@BIN@ --extract-scripts %F
+
+[Desktop Action extractAll]
+Name=Extract scripts and configs from all PBOs in this folder
+Name[ru]=Вынести скрипты и конфиги из всех PBO в папке
+Icon=archive-extract
+Exec=@BIN@ --extract-scripts-all %F
+
+[Desktop Action pack]
+Name=Put edited scripts back into this PBO
+Name[ru]=Вернуть правки в этот PBO
+Icon=archive-insert
+Exec=@BIN@ --pack-scripts %F
+
+[Desktop Action packAll]
+Name=Put edited scripts back into all PBOs in this folder
+Name[ru]=Вернуть правки во все PBO папки
+Icon=archive-insert
+Exec=@BIN@ --pack-scripts-all %F

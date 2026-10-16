@@ -11,7 +11,8 @@ def main() -> int:
         if argv[0] in COMMANDS:
             from .cli import main as cli_main
             return cli_main(argv)
-        if argv[0] in ("--unpack", "--pack"):
+        if argv[0] in ("--unpack", "--pack", "--extract-scripts", "--extract-scripts-all",
+                       "--pack-scripts", "--pack-scripts-all"):
             # вызов из контекстного меню файлового менеджера: окно с прогрессом
             from .app import run_gui
             return run_gui(sys.argv[:1], task=(argv[0][2:], argv[1:]))

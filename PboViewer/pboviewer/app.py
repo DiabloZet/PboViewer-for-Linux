@@ -25,6 +25,7 @@ from . import APP_ID, __version__  # noqa: E402
 from . import bisign as B  # noqa: E402
 from . import classes as K  # noqa: E402
 from . import pbo as P  # noqa: E402
+from . import sources as S  # noqa: E402
 from .classview import ClassBrowser, ClassSearchWindow  # noqa: E402
 from .editor import DiskTarget, EditorWindow, is_text_name  # noqa: E402
 
@@ -45,7 +46,7 @@ def cache_root() -> str:
 
 class Settings:
     DEFAULTS = {"backup": False, "confirm_replace": True, "auto_sign": False, "sign_key": "",
-                "sign_version": 3}
+                "sign_version": 3, "scripts_exts": "c,cpp,bin", "scripts_text_bin": False}
 
     def __init__(self):
         self.data = dict(self.DEFAULTS)
@@ -221,6 +222,14 @@ MENU_XML = """
       <item><attribute name="label">Открыть файл в редакторе (.bin, .cfg, .cpp…)…</attribute><attribute name="action">win.edit-disk-file</attribute></item>
     </section>
     <section>
+      <attribute name="label">Скрипты и конфиги (.c, .cpp, .bin)</attribute>
+      <item><attribute name="label">Вынести из этого PBO в папку</attribute><attribute name="action">win.extract-scripts</attribute></item>
+      <item><attribute name="label">Вынести из всех PBO в папке…</attribute><attribute name="action">win.extract-scripts-all</attribute></item>
+      <item><attribute name="label">Вернуть правки в этот PBO</attribute><attribute name="action">win.pack-scripts</attribute></item>
+      <item><attribute name="label">Вернуть правки во все PBO папки…</attribute><attribute name="action">win.pack-scripts-all</attribute></item>
+      <item><attribute name="label">Выносить config.bin текстом (config.bin.cpp)</attribute><attribute name="action">app.scripts-text-bin</attribute></item>
+    </section>
+    <section>
       <item><attribute name="label">Подписать PBO (.bisign)…</attribute><attribute name="action">win.sign</attribute></item>
       <item><attribute name="label">Создать ключи подписи (.bikey)…</attribute><attribute name="action">win.keygen</attribute></item>
       <item><attribute name="label">Обновлять .bisign после изменений</attribute><attribute name="action">app.auto-sign</attribute></item>
@@ -270,7 +279,8 @@ MENU_XML = """
 SELECTION_ACTIONS = ("open-selected", "extract", "copy", "copy-path", "rename", "delete", "replace",
                      "edit", "open-external")
 ARCHIVE_ACTIONS = ("add-files", "add-folder", "new-folder", "paste", "extract-all",
-                   "properties", "verify", "go-up", "sign", "show-files", "show-classes")
+                   "properties", "verify", "go-up", "sign", "show-files", "show-classes",
+                   "extract-scripts", "pack-scripts")
 
 
 class PboWindow(Adw.ApplicationWindow):
@@ -544,6 +554,14 @@ class PboWindow(Adw.ApplicationWindow):
         add("open-external", lambda *a: self.open_selected(external=True))
         add("edit-disk-file", lambda *a: self.edit_disk_file_dialog())
         add("sign", lambda *a: self.sign_dialog())
+        add("extract-scripts", lambda *a: self.scripts_task("extract-scripts", [self.archive.path]))
+        add("pack-scripts", lambda *a: self.scripts_task("pack-scripts", [self.archive.path]))
+        add("extract-scripts-all", lambda *a: self._pick_folder(
+            "Папка с PBO: вынести скрипты и конфиги из всех",
+            lambda d: self.scripts_task("extract-scripts-all", [d])))
+        add("pack-scripts-all", lambda *a: self._pick_folder(
+            "Папка с PBO (или pbo_sources): вернуть правки во все PBO",
+            lambda d: self.scripts_task("pack-scripts-all", [d])))
         add("keygen", lambda *a: self.keygen_dialog())
         add("show-files", lambda *a: self.pages.set_visible_child_name("files"))
         add("show-classes", lambda *a: self.pages.set_visible_child_name("classes"))
@@ -1590,6 +1608,14 @@ class PboWindow(Adw.ApplicationWindow):
     def open_class(self, info: K.ClassInfo):
         self.app.open_class(info)
 
+    # ------------------------------------------------------ вынос скриптов
+
+    def scripts_task(self, mode: str, paths: list[str]):
+        if self.busy:
+            self.toast("Дождитесь окончания текущей операции")
+            return
+        TaskWindow(self.app, mode, paths).present()
+
     # ------------------------------------------------------ подпись
 
     def _key_filter_store(self):
@@ -1712,22 +1738,45 @@ class PboWindow(Adw.ApplicationWindow):
 # Окно фоновой операции (из контекстного меню файлового менеджера)
 # ---------------------------------------------------------------------------
 
+TASK_TITLES = {
+    "unpack": "распаковка",
+    "pack": "упаковка",
+    "extract-scripts": "вынос скриптов и конфигов",
+    "extract-scripts-all": "вынос скриптов и конфигов из всех PBO",
+    "pack-scripts": "возврат скриптов в PBO",
+    "pack-scripts-all": "возврат всех скриптов в PBO",
+}
+TASK_MODES = tuple(TASK_TITLES)
+
+
 class TaskWindow(Adw.ApplicationWindow):
+    """Окно с прогрессом для вызова из контекстного меню файлового менеджера."""
+
     def __init__(self, app, mode: str, paths: list[str]):
-        super().__init__(application=app, default_width=460, resizable=False,
-                         title="PboViewer — " + ("распаковка" if mode == "unpack" else "упаковка"))
+        super().__init__(application=app, default_width=560, title="PboViewer — " + TASK_TITLES[mode])
+        self.app = app
         self.mode, self.paths = mode, [os.path.abspath(p) for p in paths]
+        self.open_dir: Optional[str] = None
         tv = Adw.ToolbarView()
-        tv.add_top_bar(Adw.HeaderBar(show_title=False))
+        tv.add_top_bar(Adw.HeaderBar())
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_start=24,
                       margin_end=24, margin_bottom=24)
         self.label = Gtk.Label(wrap=True, xalign=0)
         self.bar = Gtk.ProgressBar()
-        self.close_btn = Gtk.Button(label="Закрыть", halign=Gtk.Align.END, visible=False)
+        self.log_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                     wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=6, bottom_margin=6,
+                                     left_margin=6, right_margin=6)
+        self.log_scroll = Gtk.ScrolledWindow(child=self.log_view, min_content_height=200, vexpand=True,
+                                             visible=mode not in ("unpack", "pack"))
+        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        self.folder_btn = Gtk.Button(label="Открыть папку", visible=False)
+        self.folder_btn.connect("clicked", lambda *_: self._open_folder())
+        self.close_btn = Gtk.Button(label="Закрыть", visible=False, css_classes=["suggested-action"])
         self.close_btn.connect("clicked", lambda *_: self.close())
-        box.append(self.label)
-        box.append(self.bar)
-        box.append(self.close_btn)
+        buttons.append(self.folder_btn)
+        buttons.append(self.close_btn)
+        for w in (self.label, self.bar, self.log_scroll, buttons):
+            box.append(w)
         tv.set_content(box)
         self.set_content(tv)
         threading.Thread(target=self._work, daemon=True).start()
@@ -1739,7 +1788,28 @@ class TaskWindow(Adw.ApplicationWindow):
             self.bar.set_fraction(frac)
         return False
 
+    def _log(self, line: str):
+        def add():
+            buf = self.log_view.get_buffer()
+            buf.insert(buf.get_end_iter(), line + "\n")
+            self.log_view.scroll_mark_onscreen(buf.get_insert())
+            return False
+        GLib.idle_add(add)
+
+    def _progress(self, done, total):
+        GLib.idle_add(self._set, None, done / max(total, 1))
+
     def _work(self):
+        try:
+            if self.mode in ("unpack", "pack"):
+                results, errors = self._work_archives()
+            else:
+                results, errors = self._work_scripts()
+        except Exception as e:  # noqa: BLE001
+            results, errors = [], [str(e)]
+        GLib.idle_add(self._finish, results, errors)
+
+    def _work_archives(self):
         results, errors = [], []
         n = len(self.paths)
         for i, p in enumerate(self.paths):
@@ -1762,17 +1832,59 @@ class TaskWindow(Adw.ApplicationWindow):
                     results.append(dest)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{os.path.basename(p)}: {e}")
-        GLib.idle_add(self._finish, results, errors)
+        return results, errors
+
+    def _work_scripts(self):
+        st = self.app.settings
+        whole = self.mode.endswith("-all")
+        if self.mode.startswith("extract"):
+            pbos = S.extract_targets(self.paths, whole)
+            if not pbos:
+                return [], ["PBO не найдены"]
+            GLib.idle_add(self._set, f"Вынос скриптов и конфигов из {len(pbos)} PBO…")
+            exts = [x.strip() for x in (st.get("scripts_exts") or "c,cpp,bin").split(",") if x.strip()]
+            total, n_err = S.extract_many(pbos, None, exts, bool(st.get("scripts_text_bin")),
+                                          False, self._log, self._progress)
+            self.open_dir = S.default_out(pbos[0])
+            summary = f"Вынесено файлов: {total} из {len(pbos)} PBO → {self.open_dir}"
+        else:
+            dirs = S.pack_targets(self.paths, whole)
+            if not dirs:
+                return [], [f"Не найдено вынесенных папок ({S.OUT_DIR}/…/{S.MANIFEST}). "
+                            "Сначала вынесите скрипты из PBO."]
+            GLib.idle_add(self._set, f"Возврат правок в {len(dirs)} PBO…")
+            key = None
+            key_path = st.get("sign_key") if st.get("auto_sign") else ""
+            if key_path and os.path.isfile(key_path):
+                key = B.PrivateKey.load(key_path)
+            changed, n_err = S.pack_many(dirs, key=key, sign_version=int(st.get("sign_version") or 3),
+                                         log=self._log, progress=self._progress)
+            summary = f"Изменено PBO: {changed} из {len(dirs)}"
+        return [summary], ([f"ошибок: {n_err} (см. журнал)"] if n_err else [])
 
     def _finish(self, results, errors):
         self.bar.set_fraction(1)
+        scripts = self.mode not in ("unpack", "pack")
         if errors:
-            self.label.set_text("Ошибки:\n" + "\n".join(errors))
+            self.label.set_text("\n".join(results + ["Ошибки:"] + errors))
+            self.close_btn.set_visible(True)
+        elif scripts:
+            self.label.set_text("\n".join(results))
             self.close_btn.set_visible(True)
         else:
             self.label.set_text("Готово:\n" + "\n".join(results))
             GLib.timeout_add(1200, lambda: self.close() or False)
+        if self.open_dir and os.path.isdir(self.open_dir):
+            self.folder_btn.set_visible(True)
+        if self.mode.startswith("pack-scripts"):
+            for w in self.app.get_windows():
+                if isinstance(w, PboWindow) and w.archive is not None and not w.busy:
+                    w.refresh_safe()
+                    w.scan_classes()
         return False
+
+    def _open_folder(self):
+        Gtk.FileLauncher.new(Gio.File.new_for_path(self.open_dir)).launch(self, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -1798,7 +1910,7 @@ class PboApp(Adw.Application):
         Gtk.Window.set_default_icon_name(APP_ID)
 
         for name, key in (("backup", "backup"), ("confirm-replace", "confirm_replace"),
-                          ("auto-sign", "auto_sign")):
+                          ("auto-sign", "auto_sign"), ("scripts-text-bin", "scripts_text_bin")):
             act = Gio.SimpleAction.new_stateful(name, None, GLib.Variant("b", bool(self.settings.get(key))))
 
             def toggled(a, _p, key=key):
