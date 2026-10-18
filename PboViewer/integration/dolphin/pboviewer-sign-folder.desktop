@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+Actions=signAll;
+X-KDE-Submenu=PboViewer
+
+[Desktop Action signAll]
+Name=Sign all PBOs in the folder
+Name[ru]=Подписать все PBO в папке
+Icon=document-sign
+Exec=@BIN@ --sign-all %F

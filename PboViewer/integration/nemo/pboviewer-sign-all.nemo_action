@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Подписать все PBO в папке
+Comment=Подписать все PBO рядом ключом .biprivatekey
+Exec=@BIN@ --sign-all %F
+Icon-Name=document-sign
+Selection=notnone
+Extensions=pbo;dir;

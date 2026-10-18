@@ -50,11 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("unpack", help="распаковать весь PBO")
     s.add_argument("pbo")
     s.add_argument("-o", "--out", help="папка (по умолчанию рядом с PBO)")
+    s.add_argument("--no-debinarize", action="store_true",
+                   help="не преобразовывать бинарные config.bin в текст .cpp")
 
     s = sub.add_parser("pack", help="упаковать папку в PBO")
     s.add_argument("folder")
     s.add_argument("-o", "--out", help="файл PBO (по умолчанию <папка>.pbo)")
     s.add_argument("--prefix", help="префикс (иначе из $PBOPREFIX$)")
+    s.add_argument("--no-rapify", action="store_true",
+                   help="не преобразовывать .cpp в бинарный .bin")
 
     for name, hlp in (("add", "добавить файлы/папки (существующие заменяются)"),):
         s = sub.add_parser(name, help=hlp)
@@ -152,7 +156,8 @@ def _run(cmd, args) -> int:
         folder = args.folder.rstrip("/")
         out = args.out or folder + ".pbo"
         a = P.pack_folder(folder, out, prefix=args.prefix, backup=os.path.exists(out),
-                          progress=_progress("Упаковка"))
+                          progress=_progress("Упаковка"), rapify_cpp=not args.no_rapify,
+                          log=lambda m: print(m, file=sys.stderr))
         print(f"{out}: {len(a.entries)} файлов, префикс: {a.prefix or '—'}")
         return 0
 
@@ -195,7 +200,8 @@ def _run(cmd, args) -> int:
         print(f"Извлечено файлов: {len(pairs)}")
     elif cmd == "unpack":
         out = args.out or os.path.splitext(a.path)[0]
-        a.extract_all(out, _progress("Распаковка"))
+        a.extract_all(out, _progress("Распаковка"), debinarize=not args.no_debinarize,
+                      log=lambda m: print(m, file=sys.stderr))
         print(out)
     elif cmd == "add":
         plan = a.edit()

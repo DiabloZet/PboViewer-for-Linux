@@ -46,7 +46,8 @@ def cache_root() -> str:
 
 class Settings:
     DEFAULTS = {"backup": False, "confirm_replace": True, "auto_sign": False, "sign_key": "",
-                "sign_version": 3, "scripts_exts": "c,cpp,bin", "scripts_text_bin": False}
+                "sign_version": 3, "scripts_exts": "c,cpp,bin", "scripts_text_bin": False,
+                "rapify_on_pack": True, "debinarize_on_unpack": True}
 
     def __init__(self):
         self.data = dict(self.DEFAULTS)
@@ -216,6 +217,10 @@ MENU_XML = """
       <item><attribute name="label">Распаковать всё…</attribute><attribute name="action">win.extract-all</attribute></item>
       <item><attribute name="label">Свойства PBO (префикс)…</attribute><attribute name="action">win.properties</attribute></item>
       <item><attribute name="label">Проверить контрольную сумму</attribute><attribute name="action">win.verify</attribute></item>
+    </section>
+    <section>
+      <item><attribute name="label">При упаковке: .cpp → бинарный .bin</attribute><attribute name="action">app.rapify-on-pack</attribute></item>
+      <item><attribute name="label">При распаковке: .bin → текст .cpp</attribute><attribute name="action">app.debinarize-on-unpack</attribute></item>
     </section>
     <section>
       <item><attribute name="label">Поиск классов (моды и база DayZ)…</attribute><attribute name="action">app.class-search</attribute></item>
@@ -958,9 +963,10 @@ class PboWindow(Adw.ApplicationWindow):
                 if not dest.lower().endswith(".pbo"):
                     dest += ".pbo"
                 backup = self.app.settings.get("backup") or os.path.exists(dest)
+                rapify = bool(self.app.settings.get("rapify_on_pack"))
                 self.run_task("Упаковка…",
                               lambda progress: P.pack_folder(folder, dest, backup=backup,
-                                                             progress=progress),
+                                                             progress=progress, rapify_cpp=rapify),
                               lambda _a: (self.toast(f"Создан {os.path.basename(dest)}"),
                                           self.open_in_this_or_new(dest)),
                               "Не удалось упаковать папку")
@@ -1028,8 +1034,9 @@ class PboWindow(Adw.ApplicationWindow):
         def go(dest_parent):
             stem = os.path.splitext(os.path.basename(self.archive.path))[0]
             dest = unique_path(os.path.join(dest_parent, stem))
+            debin = bool(self.app.settings.get("debinarize_on_unpack"))
             self.run_task("Распаковка…",
-                          lambda progress: self.archive.extract_all(dest, progress),
+                          lambda progress: self.archive.extract_all(dest, progress, debinarize=debin),
                           lambda _r: self.toast(f"Распаковано в {dest}"),
                           "Не удалось распаковать архив")
         self._pick_folder("Распаковать архив в папку", go)
@@ -1790,6 +1797,8 @@ class TaskWindow(Adw.ApplicationWindow):
 
     def _log(self, line: str):
         def add():
+            self.log_scroll.set_visible(True)  # для pack/unpack — показать при первой строке
+            self._has_log = True
             buf = self.log_view.get_buffer()
             buf.insert(buf.get_end_iter(), line + "\n")
             self.log_view.scroll_mark_onscreen(buf.get_insert())
@@ -1811,6 +1820,9 @@ class TaskWindow(Adw.ApplicationWindow):
 
     def _work_archives(self):
         results, errors = [], []
+        st = self.app.settings
+        rapify = bool(st.get("rapify_on_pack"))
+        debin = bool(st.get("debinarize_on_unpack"))
         n = len(self.paths)
         for i, p in enumerate(self.paths):
             base = i / n
@@ -1822,13 +1834,14 @@ class TaskWindow(Adw.ApplicationWindow):
                     GLib.idle_add(self._set, f"Распаковка {os.path.basename(p)}…")
                     a = P.PboArchive.open(p)
                     dest = unique_path(os.path.splitext(p)[0])
-                    a.extract_all(dest, progress)
+                    a.extract_all(dest, progress, debinarize=debin, log=self._log)
                     results.append(dest)
                 else:
                     src = p.rstrip("/")
                     GLib.idle_add(self._set, f"Упаковка {os.path.basename(src)}…")
                     dest = src + ".pbo"
-                    P.pack_folder(src, dest, backup=os.path.exists(dest), progress=progress)
+                    P.pack_folder(src, dest, backup=os.path.exists(dest), progress=progress,
+                                  rapify_cpp=rapify, log=self._log)
                     results.append(dest)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{os.path.basename(p)}: {e}")
@@ -1871,6 +1884,10 @@ class TaskWindow(Adw.ApplicationWindow):
         elif scripts:
             self.label.set_text("\n".join(results))
             self.close_btn.set_visible(True)
+        elif getattr(self, "_has_log", False):
+            # были предупреждения (например, .cpp не преобразован) — дать прочитать
+            self.label.set_text("Готово:\n" + "\n".join(results))
+            self.close_btn.set_visible(True)
         else:
             self.label.set_text("Готово:\n" + "\n".join(results))
             GLib.timeout_add(1200, lambda: self.close() or False)
@@ -1885,6 +1902,145 @@ class TaskWindow(Adw.ApplicationWindow):
 
     def _open_folder(self):
         Gtk.FileLauncher.new(Gio.File.new_for_path(self.open_dir)).launch(self, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Окно подписи (из контекстного меню файлового менеджера)
+# ---------------------------------------------------------------------------
+
+class SignWindow(Adw.ApplicationWindow):
+    """Подпись одного или всех PBO папки ключом .biprivatekey (как DSSignFile)."""
+
+    def __init__(self, app, paths: list[str], whole_folder: bool):
+        super().__init__(application=app, default_width=560, title="PboViewer — подпись PBO")
+        self.app = app
+        self.targets = S.sign_targets(paths, whole_folder)
+        self.key_path = app.settings.get("sign_key") or ""
+        self.version = int(app.settings.get("sign_version") or 3)
+        self.busy = False
+        self.toasts = Adw.ToastOverlay()
+        self.set_content(self.toasts)
+        tv = Adw.ToolbarView()
+        self.toasts.set_child(tv)
+        tv.add_top_bar(Adw.HeaderBar())
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_start=24,
+                      margin_end=24, margin_top=12, margin_bottom=24)
+        n = len(self.targets)
+        box.append(Gtk.Label(xalign=0, wrap=True, label=(
+            f"Будет подписан 1 PBO: {os.path.basename(self.targets[0])}" if n == 1
+            else f"Будет подписано PBO: {n}")))
+
+        lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        self.key_row = Adw.ActionRow(title="Закрытый ключ", subtitle=self.key_path or "не выбран",
+                                     subtitle_lines=2)
+        choose = Gtk.Button(label="Выбрать…", valign=Gtk.Align.CENTER)
+        choose.connect("clicked", lambda *_: self._pick_key())
+        self.key_row.add_suffix(choose)
+        lb.append(self.key_row)
+        self.ver_row = Adw.ComboRow(title="Версия подписи",
+                                    model=Gtk.StringList.new(["v3 (DayZ, Arma 3)", "v2 (старая)"]))
+        self.ver_row.set_selected(0 if self.version == 3 else 1)
+        lb.append(self.ver_row)
+        box.append(lb)
+
+        self.bar = Gtk.ProgressBar()
+        box.append(self.bar)
+        self.log_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                     wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=6, bottom_margin=6,
+                                     left_margin=6, right_margin=6)
+        self.log_scroll = Gtk.ScrolledWindow(child=self.log_view, min_content_height=160, vexpand=True,
+                                             visible=False)
+        box.append(self.log_scroll)
+
+        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        self.sign_btn = Gtk.Button(label="Подписать", css_classes=["suggested-action"])
+        self.sign_btn.connect("clicked", lambda *_: self._start())
+        self.close_btn = Gtk.Button(label="Закрыть")
+        self.close_btn.connect("clicked", lambda *_: self.close())
+        buttons.append(self.close_btn)
+        buttons.append(self.sign_btn)
+        box.append(buttons)
+        tv.set_content(box)
+        if not self.targets:
+            self._log("PBO не найдены")
+            self.sign_btn.set_sensitive(False)
+
+    def _toast(self, text):
+        self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=4))
+
+    def _log(self, line):
+        def add():
+            self.log_scroll.set_visible(True)
+            buf = self.log_view.get_buffer()
+            buf.insert(buf.get_end_iter(), line + "\n")
+            self.log_view.scroll_mark_onscreen(buf.get_insert())
+            return False
+        GLib.idle_add(add)
+
+    def _pick_key(self):
+        dlg = Gtk.FileDialog(title="Закрытый ключ .biprivatekey")
+        f = Gtk.FileFilter(name="Закрытый ключ (.biprivatekey)")
+        f.add_pattern("*.biprivatekey")
+        store = Gio.ListStore(item_type=Gtk.FileFilter)
+        store.append(f)
+        dlg.set_filters(store)
+        if self.key_path and os.path.isdir(os.path.dirname(self.key_path)):
+            dlg.set_initial_folder(Gio.File.new_for_path(os.path.dirname(self.key_path)))
+
+        def done(d, res):
+            try:
+                path = d.open_finish(res).get_path()
+            except GLib.Error:
+                return
+            self.key_path = path
+            self.key_row.set_subtitle(path)
+            self.app.settings.set("sign_key", path)
+        dlg.open(self, None, done)
+
+    def _start(self):
+        if self.busy or not self.targets:
+            return
+        if not self.key_path or not os.path.isfile(self.key_path):
+            self._toast("Выберите файл закрытого ключа .biprivatekey")
+            return
+        version = 3 if self.ver_row.get_selected() == 0 else 2
+        self.app.settings.set("sign_version", version)
+        self.busy = True
+        self.sign_btn.set_sensitive(False)
+        self.key_row.set_sensitive(False)
+        self.ver_row.set_sensitive(False)
+        key_path, targets = self.key_path, self.targets
+
+        def work():
+            done_n = errors = 0
+            try:
+                key = B.PrivateKey.load(key_path)
+            except (B.SignError, OSError) as e:
+                GLib.idle_add(self._finish, 0, 1, f"Ключ не прочитан: {e}")
+                return
+            for i, p in enumerate(targets):
+                try:
+                    out = B.sign_pbo(p, key, version)
+                    self._log(f"подписан {os.path.basename(out)}")
+                    done_n += 1
+                except (B.SignError, P.PboError, OSError) as e:
+                    self._log(f"ОШИБКА {os.path.basename(p)}: {e}")
+                    errors += 1
+                GLib.idle_add(self.bar.set_fraction, (i + 1) / len(targets))
+            GLib.idle_add(self._finish, done_n, errors, None)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish(self, done_n, errors, fatal):
+        self.busy = False
+        self.bar.set_fraction(1)
+        self.sign_btn.set_visible(False)
+        self.close_btn.set_label("Закрыть")
+        self.close_btn.add_css_class("suggested-action")
+        if fatal:
+            self._toast(fatal)
+        else:
+            self._toast(f"Подписано: {done_n}" + (f", ошибок: {errors}" if errors else ""))
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1910,7 +2066,9 @@ class PboApp(Adw.Application):
         Gtk.Window.set_default_icon_name(APP_ID)
 
         for name, key in (("backup", "backup"), ("confirm-replace", "confirm_replace"),
-                          ("auto-sign", "auto_sign"), ("scripts-text-bin", "scripts_text_bin")):
+                          ("auto-sign", "auto_sign"), ("scripts-text-bin", "scripts_text_bin"),
+                          ("rapify-on-pack", "rapify_on_pack"),
+                          ("debinarize-on-unpack", "debinarize_on_unpack")):
             act = Gio.SimpleAction.new_stateful(name, None, GLib.Variant("b", bool(self.settings.get(key))))
 
             def toggled(a, _p, key=key):
@@ -1942,7 +2100,11 @@ class PboApp(Adw.Application):
 
     def do_activate(self):
         if self.task:
-            TaskWindow(self, *self.task).present()
+            mode, paths = self.task
+            if mode in ("sign", "sign-all"):
+                SignWindow(self, paths, whole_folder=mode == "sign-all").present()
+            else:
+                TaskWindow(self, mode, paths).present()
             return
         win = self.get_active_window()
         if win is None:

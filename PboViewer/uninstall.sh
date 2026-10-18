@@ -13,6 +13,8 @@ rm -f "$PREFIX/bin/pboviewer" \
       "$SHARE/kio/servicemenus/pboviewer-folder.desktop" \
       "$SHARE/kio/servicemenus/pboviewer-scripts-pbo.desktop" \
       "$SHARE/kio/servicemenus/pboviewer-scripts-folder.desktop" \
+      "$SHARE/kio/servicemenus/pboviewer-sign-pbo.desktop" \
+      "$SHARE/kio/servicemenus/pboviewer-sign-folder.desktop" \
       "$SHARE/nautilus-python/extensions/pboviewer_nautilus.py" \
       "$SHARE"/nemo/actions/pboviewer-*.nemo_action
 find "$SHARE/icons/hicolor" \( -name "$APP_ID.png" -o -name "application-x-pbo.png" \) -delete 2>/dev/null

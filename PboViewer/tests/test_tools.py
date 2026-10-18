@@ -199,3 +199,47 @@ class SignTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PackConvertTests(unittest.TestCase):
+    def test_rapify_on_pack_and_debinarize_on_unpack(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "src")
+            os.makedirs(os.path.join(src, "scripts"))
+            with open(os.path.join(src, "config.cpp"), "w") as f:
+                f.write("class CfgPatches { class M { units[]={}; }; };\n")
+            with open(os.path.join(src, "extra.cpp"), "w") as f:
+                f.write("class A { v=1; };\n")
+            with open(os.path.join(src, "withinc.cpp"), "w") as f:
+                f.write('#include "x.hpp"\nclass B {};\n')
+            with open(os.path.join(src, "scripts", "a.c"), "w") as f:
+                f.write("class S {}\n")
+            with open(os.path.join(src, "$PBOPREFIX$"), "w") as f:
+                f.write("My\\Mod")
+            logs = []
+            a = P.pack_folder(src, os.path.join(d, "m.pbo"), rapify_cpp=True, log=logs.append)
+            names = sorted(e.name for e in a.entries)
+            self.assertEqual(names, ["config.bin", "extra.bin", "scripts\\a.c", "withinc.cpp"])
+            self.assertTrue(C.is_rapified(a.read(a.find("config.bin"))))
+            self.assertTrue(any("withinc.cpp" in m for m in logs))  # с #include остался текстом
+            self.assertTrue(a.verify())
+
+            out = os.path.join(d, "out")
+            a.extract_all(out, debinarize=True)
+            self.assertTrue(os.path.isfile(os.path.join(out, "config.cpp")))
+            self.assertTrue(os.path.isfile(os.path.join(out, "extra.cpp")))
+            self.assertFalse(os.path.exists(os.path.join(out, "config.bin")))
+            self.assertIn("class CfgPatches", open(os.path.join(out, "config.cpp")).read())
+            # без конвертации — .bin остаётся .bin
+            out2 = os.path.join(d, "out2")
+            a.extract_all(out2, debinarize=False)
+            self.assertTrue(os.path.isfile(os.path.join(out2, "config.bin")))
+
+    def test_pack_without_rapify_keeps_cpp(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "src")
+            os.makedirs(src)
+            with open(os.path.join(src, "config.cpp"), "w") as f:
+                f.write("class A {};\n")
+            a = P.pack_folder(src, os.path.join(d, "m.pbo"), rapify_cpp=False)
+            self.assertEqual([e.name for e in a.entries], ["config.cpp"])

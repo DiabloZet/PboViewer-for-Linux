@@ -359,15 +359,42 @@ class PboArchive:
                     progress(done, total)
 
     def extract_all(self, dest_dir: str, progress: Progress = None,
-                    write_props: bool = True) -> None:
+                    write_props: bool = True, debinarize: bool = False,
+                    log: Optional[Callable[[str], None]] = None) -> None:
+        """debinarize: бинарные config.bin (rapified) распаковываются как текст .cpp."""
         os.makedirs(dest_dir, exist_ok=True)
         if write_props:
             for k, v in self.props:
                 name = f"${k.upper()}$"
                 with open(os.path.join(dest_dir, name), "w", encoding="utf-8") as fh:
                     fh.write(v)
-        items = [(e, os.path.join(dest_dir, safe_relpath(e.name)))
-                 for e in self.entries if safe_relpath(e.name)]
+        if debinarize:
+            from . import config as _cfg
+        items = []
+        for e in self.entries:
+            rel = safe_relpath(e.name)
+            if not rel:
+                continue
+            if debinarize and rel.lower().endswith(".bin"):
+                try:
+                    data = self.read(e)
+                except PboError:
+                    data = None
+                if data is not None and _cfg.is_rapified(data):
+                    dest = os.path.join(dest_dir, rel[:-4] + ".cpp")
+                    try:
+                        text = _cfg.derapify(data)
+                    except _cfg.ConfigError as ex:
+                        if log:
+                            log(f"{e.name}: не удалось преобразовать в .cpp ({ex}), оставлен .bin")
+                    else:
+                        d = os.path.dirname(dest)
+                        if d:
+                            os.makedirs(d, exist_ok=True)
+                        with open(dest, "w", encoding="utf-8") as fh:
+                            fh.write(text)
+                        continue
+            items.append((e, os.path.join(dest_dir, rel)))
         self.extract(items, progress)
 
     def verify(self, progress: Progress = None) -> Optional[bool]:
@@ -668,23 +695,51 @@ def is_prop_file(folder: str, path: str) -> bool:
 
 
 def pack_folder(folder: str, dest: str, prefix: Optional[str] = None,
-                backup: bool = False, progress: Progress = None) -> PboArchive:
+                backup: bool = False, progress: Progress = None,
+                rapify_cpp: bool = False,
+                log: Optional[Callable[[str], None]] = None) -> PboArchive:
+    """rapify_cpp: .cpp файлы собираются в бинарный конфиг .bin (как config.bin).
+    Если .cpp не разбирается (например, содержит #include), он кладётся как есть."""
+    import tempfile
     folder = os.path.abspath(folder)
     plan = EditPlan(None)
     plan.props = read_folder_props(folder)
     if prefix is not None:
         plan.set_prop("prefix", prefix)
     dest_abs = os.path.abspath(dest)
-    for root, dirs, files in os.walk(folder):
-        dirs.sort()
-        for fn in sorted(files):
-            full = os.path.join(root, fn)
-            if os.path.abspath(full) == dest_abs or not os.path.isfile(full):
-                continue
-            if is_prop_file(folder, full):
-                continue
-            plan.add_file(os.path.relpath(full, folder), full)
-    return plan.commit(dest, backup=backup, progress=progress)
+    tmp = None
+    if rapify_cpp:
+        from . import config as _cfg
+        tmp = tempfile.mkdtemp(prefix="pbo-rapify-")
+    try:
+        for root, dirs, files in os.walk(folder):
+            dirs.sort()
+            for fn in sorted(files):
+                full = os.path.join(root, fn)
+                if os.path.abspath(full) == dest_abs or not os.path.isfile(full):
+                    continue
+                if is_prop_file(folder, full):
+                    continue
+                rel = os.path.relpath(full, folder)
+                if rapify_cpp and fn.lower().endswith(".cpp"):
+                    try:
+                        with open(full, encoding="utf-8-sig") as fh:
+                            data = _cfg.rapify(fh.read())
+                    except (_cfg.ConfigError, OSError, UnicodeDecodeError) as ex:
+                        if log:
+                            log(f"{rel}: оставлен как .cpp ({ex})")
+                    else:
+                        binrel = rel[:-4] + ".bin"
+                        src = os.path.join(tmp, f"{len(plan.items)}.bin")
+                        with open(src, "wb") as out:
+                            out.write(data)
+                        plan.add_file(binrel, src)
+                        continue
+                plan.add_file(rel, full)
+        return plan.commit(dest, backup=backup, progress=progress)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def human_size(n: int) -> str:
