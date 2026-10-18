@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--prefix", help="префикс (иначе из $PBOPREFIX$)")
     s.add_argument("--no-rapify", action="store_true",
                    help="не преобразовывать .cpp в бинарный .bin")
+    s.add_argument("--obfuscate", action="store_true",
+                   help="минифицировать скрипты .c (убрать комментарии и пробелы)")
 
     for name, hlp in (("add", "добавить файлы/папки (существующие заменяются)"),):
         s = sub.add_parser(name, help=hlp)
@@ -157,6 +159,7 @@ def _run(cmd, args) -> int:
         out = args.out or folder + ".pbo"
         a = P.pack_folder(folder, out, prefix=args.prefix, backup=os.path.exists(out),
                           progress=_progress("Упаковка"), rapify_cpp=not args.no_rapify,
+                          obfuscate_scripts=args.obfuscate,
                           log=lambda m: print(m, file=sys.stderr))
         print(f"{out}: {len(a.entries)} файлов, префикс: {a.prefix or '—'}")
         return 0
