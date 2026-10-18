@@ -1,6 +1,6 @@
 # Локальная сборка: в этой папке выполнить  makepkg -si
 pkgname=pboviewer-gtk
-pkgver=2.4.0
+pkgver=2.3.0
 pkgrel=1
 pkgdesc="Просмотр и редактирование архивов PBO (DayZ/Arma) без распаковки: GTK4, Wayland, drag-and-drop, редактор config.bin, классы, .bisign"
 arch=('any')

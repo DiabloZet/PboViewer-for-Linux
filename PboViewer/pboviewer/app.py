@@ -47,7 +47,7 @@ def cache_root() -> str:
 class Settings:
     DEFAULTS = {"backup": False, "confirm_replace": True, "auto_sign": False, "sign_key": "",
                 "sign_version": 3, "scripts_exts": "c,cpp,bin", "scripts_text_bin": False,
-                "rapify_on_pack": True, "debinarize_on_unpack": True, "obfuscate_on_pack": False}
+                "rapify_on_pack": True, "debinarize_on_unpack": True}
 
     def __init__(self):
         self.data = dict(self.DEFAULTS)
@@ -221,7 +221,6 @@ MENU_XML = """
     <section>
       <item><attribute name="label">При упаковке: .cpp → бинарный .bin</attribute><attribute name="action">app.rapify-on-pack</attribute></item>
       <item><attribute name="label">При распаковке: .bin → текст .cpp</attribute><attribute name="action">app.debinarize-on-unpack</attribute></item>
-      <item><attribute name="label">При упаковке: обфусцировать скрипты .c (убрать комментарии)</attribute><attribute name="action">app.obfuscate-on-pack</attribute></item>
     </section>
     <section>
       <item><attribute name="label">Поиск классов (моды и база DayZ)…</attribute><attribute name="action">app.class-search</attribute></item>
@@ -965,11 +964,9 @@ class PboWindow(Adw.ApplicationWindow):
                     dest += ".pbo"
                 backup = self.app.settings.get("backup") or os.path.exists(dest)
                 rapify = bool(self.app.settings.get("rapify_on_pack"))
-                obf = bool(self.app.settings.get("obfuscate_on_pack"))
                 self.run_task("Упаковка…",
                               lambda progress: P.pack_folder(folder, dest, backup=backup,
-                                                             progress=progress, rapify_cpp=rapify,
-                                                             obfuscate_scripts=obf),
+                                                             progress=progress, rapify_cpp=rapify),
                               lambda _a: (self.toast(f"Создан {os.path.basename(dest)}"),
                                           self.open_in_this_or_new(dest)),
                               "Не удалось упаковать папку")
@@ -1825,7 +1822,6 @@ class TaskWindow(Adw.ApplicationWindow):
         results, errors = [], []
         st = self.app.settings
         rapify = bool(st.get("rapify_on_pack"))
-        obf = bool(st.get("obfuscate_on_pack"))
         debin = bool(st.get("debinarize_on_unpack"))
         n = len(self.paths)
         for i, p in enumerate(self.paths):
@@ -1845,7 +1841,7 @@ class TaskWindow(Adw.ApplicationWindow):
                     GLib.idle_add(self._set, f"Упаковка {os.path.basename(src)}…")
                     dest = src + ".pbo"
                     P.pack_folder(src, dest, backup=os.path.exists(dest), progress=progress,
-                                  rapify_cpp=rapify, obfuscate_scripts=obf, log=self._log)
+                                  rapify_cpp=rapify, log=self._log)
                     results.append(dest)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{os.path.basename(p)}: {e}")
@@ -2072,8 +2068,7 @@ class PboApp(Adw.Application):
         for name, key in (("backup", "backup"), ("confirm-replace", "confirm_replace"),
                           ("auto-sign", "auto_sign"), ("scripts-text-bin", "scripts_text_bin"),
                           ("rapify-on-pack", "rapify_on_pack"),
-                          ("debinarize-on-unpack", "debinarize_on_unpack"),
-                          ("obfuscate-on-pack", "obfuscate_on_pack")):
+                          ("debinarize-on-unpack", "debinarize_on_unpack")):
             act = Gio.SimpleAction.new_stateful(name, None, GLib.Variant("b", bool(self.settings.get(key))))
 
             def toggled(a, _p, key=key):
