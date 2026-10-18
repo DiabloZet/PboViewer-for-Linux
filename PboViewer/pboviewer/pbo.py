@@ -696,10 +696,12 @@ def is_prop_file(folder: str, path: str) -> bool:
 
 def pack_folder(folder: str, dest: str, prefix: Optional[str] = None,
                 backup: bool = False, progress: Progress = None,
-                rapify_cpp: bool = False,
+                rapify_cpp: bool = False, obfuscate_scripts: bool = False,
                 log: Optional[Callable[[str], None]] = None) -> PboArchive:
     """rapify_cpp: .cpp файлы собираются в бинарный конфиг .bin (как config.bin).
-    Если .cpp не разбирается (например, содержит #include), он кладётся как есть."""
+    Если .cpp не разбирается (например, содержит #include), он кладётся как есть.
+    obfuscate_scripts: из .c убираются комментарии и лишние пробелы (минификация).
+    Исходная папка в обоих случаях не меняется — всё пишется во временные файлы."""
     import tempfile
     folder = os.path.abspath(folder)
     plan = EditPlan(None)
@@ -710,7 +712,10 @@ def pack_folder(folder: str, dest: str, prefix: Optional[str] = None,
     tmp = None
     if rapify_cpp:
         from . import config as _cfg
-        tmp = tempfile.mkdtemp(prefix="pbo-rapify-")
+    if obfuscate_scripts:
+        from . import obfuscate as _obf
+    if rapify_cpp or obfuscate_scripts:
+        tmp = tempfile.mkdtemp(prefix="pbo-pack-")
     try:
         for root, dirs, files in os.walk(folder):
             dirs.sort()
@@ -721,7 +726,8 @@ def pack_folder(folder: str, dest: str, prefix: Optional[str] = None,
                 if is_prop_file(folder, full):
                     continue
                 rel = os.path.relpath(full, folder)
-                if rapify_cpp and fn.lower().endswith(".cpp"):
+                low = fn.lower()
+                if rapify_cpp and low.endswith(".cpp"):
                     try:
                         with open(full, encoding="utf-8-sig") as fh:
                             data = _cfg.rapify(fh.read())
@@ -734,6 +740,19 @@ def pack_folder(folder: str, dest: str, prefix: Optional[str] = None,
                         with open(src, "wb") as out:
                             out.write(data)
                         plan.add_file(binrel, src)
+                        continue
+                if obfuscate_scripts and low.endswith(".c"):
+                    try:
+                        with open(full, encoding="utf-8-sig") as fh:
+                            mini = _obf.minify_script(fh.read())
+                        src = os.path.join(tmp, f"{len(plan.items)}.c")
+                        with open(src, "w", encoding="utf-8") as out:
+                            out.write(mini)
+                    except (OSError, UnicodeDecodeError) as ex:
+                        if log:
+                            log(f"{rel}: не обфусцирован ({ex})")
+                    else:
+                        plan.add_file(rel, src)
                         continue
                 plan.add_file(rel, full)
         return plan.commit(dest, backup=backup, progress=progress)
