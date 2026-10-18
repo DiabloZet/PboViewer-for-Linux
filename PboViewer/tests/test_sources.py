@@ -41,6 +41,11 @@ class SourcesTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_sign_targets(self):
+        self.assertEqual(S.sign_targets([self.a], False), [self.a])
+        self.assertEqual(S.sign_targets([self.a], True), [self.a, self.b])
+        self.assertEqual(S.sign_targets([self.addons], False), [self.a, self.b])
+
     def test_targets(self):
         self.assertEqual(S.extract_targets([self.a], False), [self.a])
         self.assertEqual(S.extract_targets([self.a], True), [self.a, self.b])

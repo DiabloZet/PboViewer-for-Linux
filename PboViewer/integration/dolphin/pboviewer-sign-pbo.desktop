@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Service
+MimeType=application/x-pbo;
+Actions=sign;signAll;
+X-KDE-Submenu=PboViewer
+
+[Desktop Action sign]
+Name=Sign this PBO (.bisign)
+Name[ru]=Подписать этот PBO (.bisign)
+Icon=document-sign
+Exec=@BIN@ --sign %F
+
+[Desktop Action signAll]
+Name=Sign all PBOs in this folder
+Name[ru]=Подписать все PBO в папке
+Icon=document-sign
+Exec=@BIN@ --sign-all %F

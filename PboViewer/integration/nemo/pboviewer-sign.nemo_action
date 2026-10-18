@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Подписать этот PBO (.bisign)
+Comment=Подписать выбранный PBO ключом .biprivatekey
+Exec=@BIN@ --sign %F
+Icon-Name=document-sign
+Selection=notnone
+Extensions=pbo;

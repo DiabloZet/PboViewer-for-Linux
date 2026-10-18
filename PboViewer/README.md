@@ -81,8 +81,18 @@ Ctrl+S сохраняет **сразу в архив**. Подсветка си�
 Правый клик по `.pbo`:
 - **Открыть архив в PboViewer**
 - **Распаковать PBO сюда** (распаковывает в папку рядом, показывает окно с прогрессом)
+- **Подписать этот PBO (.bisign)** и **Подписать все PBO в папке** — открывается окно, где
+  выбирается ключ `.biprivatekey` (запоминается), версия подписи и запускается подпись.
 
-Правый клик по папке → **Упаковать папку в PBO** (создаёт `<папка>.pbo` рядом).
+Правый клик по папке → **Упаковать папку в PBO** (создаёт `<папка>.pbo` рядом), а также
+**Подписать все PBO в папке**.
+
+**Преобразование конфигов при упаковке/распаковке.** По умолчанию при создании PBO из папки
+все `.cpp` собираются в бинарный `.bin` (как `config.bin`), а при распаковке всего архива
+бинарные `.bin` распаковываются обратно в текст `.cpp`. Файл `.cpp`, который не разбирается
+(например, содержит `#include`), остаётся как есть и отмечается в журнале. Поведение
+переключается в *Меню → «При упаковке: .cpp → .bin»* и *«При распаковке: .bin → .cpp»*,
+в командной строке — флагами `pack --no-rapify` и `unpack --no-debinarize`.
 
 Подменю **«Скрипты и конфиги (PboViewer)»**: вынести `.c`, `.cpp`, `.bin` из PBO в папку для правки
 и вернуть правки обратно.
@@ -145,8 +155,8 @@ pboviewer add mod.pbo ./scripts -t ""      # добавить/заменить �
 pboviewer delete mod.pbo "data\old.paa"
 pboviewer rename mod.pbo "scripts\old" "scripts\new"
 pboviewer extract mod.pbo config.cpp scripts -o ./out
-pboviewer unpack mod.pbo [-o папка]
-pboviewer pack ./mod [-o mod.pbo] [--prefix "Artemida\mod"]
+pboviewer unpack mod.pbo [-o папка]         # .bin → .cpp (отключить: --no-debinarize)
+pboviewer pack ./mod [-o mod.pbo] [--prefix "Artemida\mod"]  # .cpp → .bin (--no-rapify откл.)
 pboviewer prefix mod.pbo [новый_префикс]
 pboviewer verify mod.pbo
 pboviewer classes mod.pbo                  # все классы мода: родитель, описание, файл:строка

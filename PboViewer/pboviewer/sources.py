@@ -264,6 +264,11 @@ def extract_targets(paths: list[str], whole_folder: bool) -> list[str]:
     return _uniq(out)
 
 
+def sign_targets(paths: list[str], whole_folder: bool) -> list[str]:
+    """PBO для подписи (тот же выбор целей, что и при выносе скриптов)."""
+    return extract_targets(paths, whole_folder)
+
+
 def pack_targets(paths: list[str], whole_folder: bool) -> list[str]:
     """Папки модов для возврата в PBO.
 

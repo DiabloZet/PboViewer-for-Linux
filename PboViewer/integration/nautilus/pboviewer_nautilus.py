@@ -53,11 +53,16 @@ class PboViewerMenu(GObject.GObject, Nautilus.MenuProvider):
                 self._item("open", "Открыть архив в PboViewer", "org.pboviewer.PboViewer", [], files),
                 self._item("unpack", "Распаковать PBO сюда", "archive-extract", ["--unpack"], files),
                 self._scripts_menu(files, on_pbo=True),
+                self._item("sign", "Подписать этот PBO (.bisign)", "document-sign", ["--sign"], files),
+                self._item("sign-all", "Подписать все PBO в папке", "document-sign",
+                           ["--sign-all"], files),
             ]
         if all(f.is_directory() for f in files):
             return [self._item("pack", "Упаковать папку в PBO", "org.pboviewer.PboViewer",
                                ["--pack"], files),
-                    self._scripts_menu(files, on_pbo=False)]
+                    self._scripts_menu(files, on_pbo=False),
+                    self._item("sign-all", "Подписать все PBO в папке", "document-sign",
+                               ["--sign-all"], files)]
         return []
 
     def get_background_items(self, *args):
@@ -65,4 +70,6 @@ class PboViewerMenu(GObject.GObject, Nautilus.MenuProvider):
         folder = args[-1]
         if folder is None or folder.get_uri_scheme() != "file":
             return []
-        return [self._scripts_menu([folder], on_pbo=False)]
+        return [self._scripts_menu([folder], on_pbo=False),
+                self._item("sign-all-bg", "Подписать все PBO в папке", "document-sign",
+                           ["--sign-all"], [folder])]
